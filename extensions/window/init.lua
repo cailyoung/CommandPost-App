@@ -76,10 +76,11 @@ end
 ---    from a Chrome window would end up "focusing" its status bar, and therefore the proper window itself, seemingly resulting
 ---    in a no-op. In order to avoid such surprises you can use the `hs.window.filter` module, and more specifically
 ---    the default windowfilter (`hs.window.filter.default`) which filters out known cases of not-actual-windows
+---  * Some windows will not be reported by OSX - e.g. things that are on different Spaces, or things that are Full Screen
 local SKIP_APPS={
   ['com.apple.WebKit.WebContent']=true,['com.apple.qtserver']=true,['com.google.Chrome.helper']=true,
   ['org.pqrs.Karabiner-AXNotifier']=true,['com.adobe.PDApp.AAMUpdatesNotifier']=true,
-  ['com.adobe.csi.CS5.5ServiceManager']=true}
+  ['com.adobe.csi.CS5.5ServiceManager']=true,['com.mcafee.McAfeeReporter']=true}
 -- so apparently OSX enforces a 6s limit on apps to respond to AX queries;
 -- Karabiner's AXNotifier and Adobe Update Notifier fail in that fashion
 function window.allWindows()

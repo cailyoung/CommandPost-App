@@ -297,6 +297,48 @@ static int hs_operatingSystemVersionString(lua_State *L) {
     return 1 ;
 }
 
+/// hs.host.thermalState() -> string
+/// Function
+/// The current thermal state of the computer, as a human readable string
+///
+/// Parameters:
+///  * None
+///
+/// Returns:
+///  * The system's thermal state as a human readable string
+static int hs_thermalStateString(lua_State *L) {
+    LuaSkin *skin = [LuaSkin shared];
+    [skin checkArgs:LS_TBREAK];
+
+    NSProcessInfoThermalState state = [NSProcessInfo processInfo].thermalState;
+    NSString *returnState = nil;
+
+    switch (state) {
+        case NSProcessInfoThermalStateNominal:
+            returnState = @"nominal";
+            break;
+
+        case NSProcessInfoThermalStateFair:
+            returnState = @"fair";
+            break;
+
+        case NSProcessInfoThermalStateSerious:
+            returnState = @"serious";
+            break;
+
+        case NSProcessInfoThermalStateCritical:
+            returnState = @"critical";
+            break;
+
+        default:
+            returnState = @"unknown";
+            break;
+    }
+
+    [skin pushNSObject:returnState];
+    return 1;
+}
+
 /// hs.host.operatingSystemVersion() -> table
 /// Function
 /// The operating system version as a table containing the major, minor, and patch numbers.
@@ -599,6 +641,73 @@ static int hs_volumeInformation(lua_State* L) {
     return 1;
 }
 
+
+/// hs.host.gpuVRAM() -> table
+/// Function
+/// Returns the model and VRAM size for the installed GPUs.
+///
+/// Parameters:
+///  * None
+///
+/// Returns:
+///  * A table whose key-value pairs represent the GPUs for the current system.  Each key is a string contining the name for an installed GPU and its value is the GPU's VRAM size in MB.  If the VRAM size cannot be determined for a specific GPU, its value will be -1.0.
+///
+/// Notes:
+///  * If your GPU reports -1.0 as the memory size, please submit an issue to the Hammerspoon github repository and include any information that you can which may be relevant, such as: Macintosh model, macOS version, is the GPU built in or a third party expansion card, the GPU model and VRAM as best you can determine (see the System Information application in the Utilities folder and look at the Graphics/Display section) and anything else that you think might be important.
+static int hs_vramSize(lua_State *L) {
+    io_iterator_t Iterator;
+    kern_return_t err = IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceMatching("IOPCIDevice"), &Iterator);
+    if (err != KERN_SUCCESS) {
+        return luaL_error(L, "IOServiceGetMatchingServices failed: %u\n", err);
+    }
+
+    lua_newtable(L) ;
+
+    for (io_service_t Device; IOIteratorIsValid(Iterator) && (Device = IOIteratorNext(Iterator)); IOObjectRelease(Device)) {
+        CFStringRef Name = IORegistryEntrySearchCFProperty(Device, kIOServicePlane, CFSTR("IOName"), kCFAllocatorDefault, kNilOptions);
+        if (Name) {
+            if (CFStringCompare(Name, CFSTR("display"), (CFStringCompareFlags)0) == kCFCompareEqualTo) {
+                CFDataRef Model = IORegistryEntrySearchCFProperty(Device, kIOServicePlane, CFSTR("model"), kCFAllocatorDefault, kNilOptions);
+                if (Model) {
+                    _Bool ValueInBytes = TRUE;
+                    CFTypeRef VRAMSize = IORegistryEntrySearchCFProperty(Device, kIOServicePlane, CFSTR("VRAM,totalsize"), kCFAllocatorDefault, kIORegistryIterateRecursively); //As it could be in a child
+                    if (!VRAMSize) {
+                        ValueInBytes = FALSE;
+                        VRAMSize = IORegistryEntrySearchCFProperty(Device, kIOServicePlane, CFSTR("VRAM,totalMB"), kCFAllocatorDefault, kIORegistryIterateRecursively); //As it could be in a child
+                    }
+
+                    if (VRAMSize) {
+                        mach_vm_size_t Size = 0;
+                        CFTypeID Type = CFGetTypeID(VRAMSize);
+                        if (Type == CFDataGetTypeID()) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-align"
+                            Size = (CFDataGetLength(VRAMSize) == sizeof(uint32_t) ? (mach_vm_size_t)*(const uint32_t*)CFDataGetBytePtr(VRAMSize) : *(const uint64_t*)CFDataGetBytePtr(VRAMSize));
+#pragma clang diagnostic pop
+
+                        } else if (Type == CFNumberGetTypeID()) {
+                            CFNumberGetValue(VRAMSize, kCFNumberSInt64Type, &Size);
+                        }
+
+                        if (ValueInBytes) Size >>= 20;
+
+                        lua_pushnumber(L, Size) ;
+                    } else {
+                        lua_pushnumber(L, -1) ;
+                    }
+
+                    lua_setfield(L, -2, (const char *)CFDataGetBytePtr(Model)) ;
+                    CFRelease(Model);
+                }
+            }
+
+            CFRelease(Name);
+        }
+    }
+
+    return 1;
+}
+
 static const luaL_Reg hostlib[] = {
     {"addresses",                    hostAddresses},
     {"names",                        hostNames},
@@ -607,11 +716,13 @@ static const luaL_Reg hostlib[] = {
     {"cpuUsageTicks",                hs_cpuUsageTicks},
     {"operatingSystemVersion",       hs_operatingSystemVersion},
     {"operatingSystemVersionString", hs_operatingSystemVersionString},
+    {"thermalState",                 hs_thermalStateString},
     {"interfaceStyle",               hs_interfaceStyle},
     {"uuid",                         hs_uuid},
     {"globallyUniqueString",         hs_globallyUniqueString},
     {"volumeInformation",            hs_volumeInformation},
     {"idleTime",                     hs_idleTime},
+    {"gpuVRAM",                      hs_vramSize},
 
     {NULL, NULL}
 };
