@@ -20,20 +20,6 @@
 #import "lualib.h"
 #import "lua.h"
 
-// Abstract Crashlytics logging because it keeps hurting us, but in a way that doesn't force a dependency on Crashlytics
-#ifdef CLS_LOG
-#   ifdef DEBUG
-#       define HSLOG(__FORMAT__, ...)
-#   else
-#       define HSLOG(__FORMAT__, ...) CLS_LOG(__FORMAT__, ##__VA_ARGS__)
-#   endif
-#   define HSNSLOG(__FORMAT__, ...) CLSNSLog((@"%s line %d $ " __FORMAT__), __PRETTY_FUNCTION__, __LINE__, ##__VA_ARGS__)
-#endif
-#ifndef HSLOG
-#   define HSLOG(__FORMAT__, ...)
-#   define HSNSLOG(__FORMAT__, ...) NSLog(__FORMAT__, ##__VA_ARGS__)
-#endif
-
 // Define some bits for masking operations in the argument checker
 /*!
   @definedblock Bit masks for Lua type checking with LuaSkin:checkArgs:
@@ -148,11 +134,27 @@ NSString *specMaskToString(int spec);
 + (id)shared;
 
 /*!
+ @abstract Returns the singleton LuaSkin.Skin object and sets its delegate
+ @param delegate An object that responds to -(void)logForLuaSkinAtLevel:(int)level withMessage:(NSString *)theMessage
+ @discussion It is only appropriate to use this class method when you are first bootstrapping your LuaSkin instance, and its only reason for existence is to ensure that the logging delegate is set early enough to capture any messages that might arise during the initial Lua instantiation. For all other purposes, use [LuaSkin shared].
+ @return Shared instance of LuaSkinSkin
+ */
++ (id)sharedWithDelegate:(id)delegate;
+
+/*!
  @abstract Initialises a LuaSkin object
  @discussion Typically you are unlikely to want to use the alloc/init pattern. Instead, see @link shared @/link for getting the singleton object. You should only call alloc/init directly if you need to manage multiple Lua environments
  @return An initialised LuaSkin.Skin object
  */
 - (id)init;
+
+/*!
+ @abstract Initialises a LuaSkin object and sets its delegate
+ @param delegate An object that responds to -(void)logForLuaSkinAtLevel:(int)level withMessage:(NSString *)theMessage
+ @discussion Typically you are unlikely to want to use the alloc/init pattern. Instead, see @link shared @/link for getting the singleton object. You should only call this method directly if you need to manage multiple Lua environments with logging delegates
+ @return An initialised LuaSkin.Skin object
+ */
+- (id)initWithDelegate:(id)delegate;
 
 #pragma mark - lua_State lifecycle
 
