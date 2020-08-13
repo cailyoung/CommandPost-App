@@ -188,6 +188,7 @@ def get_section_from_chunk(chunk, sectionname):
                 break
             else:
                 section.append(line)
+                section.append("\n")
     return section
 
 
@@ -453,11 +454,14 @@ def write_sql(filepath, data):
                     "'Module', '%(modname)s.html');" %
                     {"modname": module["name"]})
         for item in module["items"]:
-            cur.execute("INSERT INTO searchIndex VALUES(NULL, "
-                        "'%(modname)s.%(itemname)s', "
-                        "'%(itemtype)s', '%(modname)s.html#%(itemname)s');" %
-                        {"modname": module["name"], "itemname": item["name"],
-                         "itemtype": item["type"]})
+            try:
+                cur.execute("INSERT INTO searchIndex VALUES(NULL, "
+                            "'%(modname)s.%(itemname)s', "
+                            "'%(itemtype)s', '%(modname)s.html#%(itemname)s');" %
+                            {"modname": module["name"], "itemname": item["name"],
+                             "itemtype": item["type"]})
+            except:
+                err("DB Insert failed on %s:%s(%s)" % (module["name"], item["name"], item["type"]))
 
     cur.execute("VACUUM;")
     db.commit()
@@ -468,6 +472,20 @@ def write_templated_output(output_dir, template_dir, title, data, extension):
     from jinja2 import Environment
 
     jinja = Environment(trim_blocks=True, lstrip_blocks=True)
+
+	########################################################
+	## ADDED BY CHRIS FOR COMMANDPOST:
+	########################################################
+    import jinja2
+    import markdown
+
+    md = markdown.Markdown(extensions=['meta'])
+
+    jinja = jinja2.Environment()
+    jinja.filters['markdown'] = lambda text: jinja2.Markup(md.convert(text))
+    jinja.trim_blocks = True
+    jinja.lstrip_blocks = True
+	########################################################
 
     # Make sure we have a valid output_dir
     if not os.path.isdir(output_dir):

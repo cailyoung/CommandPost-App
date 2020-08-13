@@ -1,7 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <Cocoa/Cocoa.h>
 #import <LuaSkin/LuaSkin.h>
-#import "application.h"
+#import "HSuicore.h"
 
 /// === hs.application.watcher ===
 ///
@@ -82,8 +82,9 @@ typedef enum _event_t {
     if (!self.object->running)
         return;
 
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:NULL];
     lua_State *L = skin.L;
+    _lua_stackguard_entry(L);
 
     // Depending on the event the name of the NSRunningApplication object may not be available
     // anymore. Fallback to the application name which is provided directly in the notification
@@ -102,15 +103,11 @@ typedef enum _event_t {
 
     lua_pushinteger(L, event); // Parameter 2: the event type
 
-    if (!new_application(L, [app processIdentifier])) { // Paremeter 3: application object
-        lua_pushnil(L);
-    }
+    HSapplication *application = [HSapplication applicationForNSRunningApplication:app withState:L];
+    [skin pushNSObject:application];
 
-    if (![skin protectedCallAndTraceback:3 nresults:0]) {
-        const char *errorMsg = lua_tostring(L, -1);
-        [skin logError:[NSString stringWithFormat:@"hs.application.watcher callback error: %s", errorMsg]];
-        lua_pop(L, 1) ; // remove error message
-    }
+    [skin protectedCallAndError:@"hs.application.watcher callback" nargs:3 nresults:0];
+    _lua_stackguard_exit(L);
 }
 
 - (void)applicationWillLaunch:(NSNotification*)notification {
@@ -158,7 +155,7 @@ typedef enum _event_t {
 /// Notes:
 ///  * If the function is called with an event type of `hs.application.watcher.terminated` then the application name parameter will be `nil` and the `hs.application` parameter, will only be useful for getting the UNIX process ID (i.e. the PID) of the application
 static int app_watcher_new(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
 
     luaL_checktype(L, 1, LUA_TFUNCTION);
 
@@ -272,7 +269,7 @@ static int app_watcher_stop(lua_State* L) {
 
 // Perform cleanup if the AppWatcher is not required anymore.
 static int app_watcher_gc(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
 
     appwatcher_t* appWatcher = luaL_checkudata(L, 1, USERDATA_TAG);
 
@@ -334,7 +331,7 @@ static const luaL_Reg metaGcLib[] = {
 
 // Called when loading the module. All necessary tables need to be registered here.
 int luaopen_hs_application_watcher(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     refTable = [skin registerLibraryWithObject:USERDATA_TAG functions:appLib metaFunctions:metaGcLib objectFunctions:metaLib];
 
     add_event_enum(L);

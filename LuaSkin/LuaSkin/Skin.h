@@ -13,12 +13,34 @@
  */
 
 
-@import Foundation;
+#import <Foundation/Foundation.h>
 #import "lobject.h"
 #import "lapi.h"
 #import "lauxlib.h"
 #import "lualib.h"
 #import "lua.h"
+#import <assert.h>
+#import <limits.h>
+#import <dlfcn.h>
+
+extern const char * const LuaSkin_UD_TAG ;
+extern int luaopen_luaskin_internal(lua_State* L) ; // entry vector to luaskin.m objectWrapper additions
+
+// Defines for Lua stack guard macros
+/*
+#ifdef DEBUG
+#   define _lua_stackguard_entry(L) int __lua_stackguard_entry=lua_gettop(L); NSLog(@"lua stack is %d at %s:%s:%d", __lua_stackguard_entry, __FILE__, __FUNCTION__, __LINE__);
+#   define _lua_stackguard_exit(L) NSLog(@"lua stack is %d at %s:ss%s:%d", lua_gettop(L), __FILE__, __FUNCTION__, __LINE__); assert(__lua_stackguard_entry == lua_gettop(L));
+#else
+ */
+#   define _lua_stackguard_entry(L) int __lua_stackguard_entry=lua_gettop(L);
+#   define _lua_stackguard_exit(L) assert(__lua_stackguard_entry == lua_gettop(L));
+/*
+#endif
+ */
+
+// Define a break variable for the reference checker
+#define LS_RBREAK INT_MIN
 
 // Define some bits for masking operations in the argument checker
 /*!
@@ -39,6 +61,7 @@
 #define LS_TINTEGER       1 << 11 /*! @define LS_TINTEGER Can be OR'd with LS_TNUMBER to specify that the number must be an integer.  This option is ignored if paired with other types. */
 #define LS_TVARARG        1 << 12 /*! @define LS_TVARARG Can be OR'd with LS_TBREAK to indicate that any additional arguments on the stack after this location are to be ignored by @link //apple_ref/occ/instm/LuaSkin/checkArgs: checkArgs @/link.  It is the responsibility of the module function to check and use or ignore any additional arguments. */
 #define LS_TTYPEDTABLE    1 << 13 /*! @define LS_TTYPEDTABLE maps to LUA_TTABLE, but like LS_TUSERDATA, expects a string argument following which specifies the specific value expected in the __luaSkinType field of the table. */
+#define LS_TWRAPPEDOBJECT 1 << 14 /*! @define LS_TWRAPPEDOBJECT maps to a userdata which represents a raw Objective-C object. */
 
 /*! @/definedblock Bit masks for Lua type checking */
 
@@ -66,6 +89,9 @@ typedef NS_OPTIONS(NSUInteger, LS_NSConversionOptions) {
     LS_NSAllowsSelfReference          = 1 << 4,
     LS_NSRawTables                    = 1 << 6,
 
+    LS_WithObjectWrapper              = 1 << 15,
+    LS_OW_ReadWrite                   = 1 << 16,
+    LS_OW_WithArrayConversion         = 1 << 17,
 } ;
 
 /*!
@@ -125,36 +151,38 @@ NSString *specMaskToString(int spec);
  */
 @property (atomic, readonly) lua_State *L;
 
+/*!
+ @property mainLuaState
+ @abstract The lua state that LuaSkin was initialized with
+ @discussion Provides access to the raw Lua state object that was created when LuaSkin was initialized. This is the main lua thread where all callbacks should be run.  Care should be taken when using this object, to ensure you are interacting with the Lua stack in a way that makes sense
+ */
+@property (class, readonly, atomic) lua_State *mainLuaState ;
+
 #pragma mark - Class lifecycle
 
 /*!
  @abstract Returns the singleton LuaSkin.Skin object
+ @warning This method is deprecated and may go away at some point. Use +(id)sharedWithState:(lua_State *)L instead.
  @return Shared instance of LuaSkin.Skin
  */
 + (id)shared;
 
 /*!
+ @abstract Returns the singleton LuaSkin.Skin object with the internal lua thread pointer set to the specified state.
+ @param L the lua state representing the lua thread to assign to the LuaSkin internal lua thread pointer. If NULL, the lua state that was created by +(id)sharedWithDelegate:(id)delegate will be used.
+ @discussion This method will set the internal lua thread pointer to the specified state and should be invoked with the state passed into the C function defining a new lua function or method. For macOS delegates or other events which are triggered by the macOS rather than the lua engine executing a code block, pass in NULL for L.
+ @return Shared instance of LuaSkin.Skin
+*/
++ (id)sharedWithState:(lua_State *)L ;
+
+/*!
  @abstract Returns the singleton LuaSkin.Skin object and sets its delegate
  @param delegate An object that responds to -(void)logForLuaSkinAtLevel:(int)level withMessage:(NSString *)theMessage
- @discussion It is only appropriate to use this class method when you are first bootstrapping your LuaSkin instance, and its only reason for existence is to ensure that the logging delegate is set early enough to capture any messages that might arise during the initial Lua instantiation. For all other purposes, use [LuaSkin shared].
+ @discussion It is only appropriate to use this class method when you are first bootstrapping your LuaSkin instance, and its only reason for existence is to ensure that the logging delegate is set early enough to capture any messages that might arise during the initial Lua instantiation. For all other purposes, use +(id)sharedWithState:(lua_State *)L.
+ @warning Calling this method leaves the lua thread pointer in the same state that invoking [LuaSkin sharedWithState:NULL] will.
  @return Shared instance of LuaSkinSkin
  */
 + (id)sharedWithDelegate:(id)delegate;
-
-/*!
- @abstract Initialises a LuaSkin object
- @discussion Typically you are unlikely to want to use the alloc/init pattern. Instead, see @link shared @/link for getting the singleton object. You should only call alloc/init directly if you need to manage multiple Lua environments
- @return An initialised LuaSkin.Skin object
- */
-- (id)init;
-
-/*!
- @abstract Initialises a LuaSkin object and sets its delegate
- @param delegate An object that responds to -(void)logForLuaSkinAtLevel:(int)level withMessage:(NSString *)theMessage
- @discussion Typically you are unlikely to want to use the alloc/init pattern. Instead, see @link shared @/link for getting the singleton object. You should only call this method directly if you need to manage multiple Lua environments with logging delegates
- @return An initialised LuaSkin.Skin object
- */
-- (id)initWithDelegate:(id)delegate;
 
 #pragma mark - lua_State lifecycle
 
@@ -200,11 +228,22 @@ NSString *specMaskToString(int spec);
  if (!result) handleSomeError();
  @/textblock</pre>
 
+ @warning You are strongly advised to check the return code of this method - if it returns NO there will be an error message left on the Lua stack, which you should pop
  @return NO if the Lua code threw an exception, otherwise YES
  @param nargs An integer specifying how many function arguments you have pushed onto the stack
  @param nresults An integer specifying how many return values the Lua function will push onto the stack
  */
 - (BOOL)protectedCallAndTraceback:(int)nargs nresults:(int)nresults;
+
+/*!]
+ @abstract Calls protectedCallAndTraceback and will logError any failures
+ @discussion See the docs for protectedCallAndTraceback for all of the details of this method. The one difference is that this method will check for failure, log the error with logError, and leave nothing on the stack (although in the case of success, nresults elements will remain on the stack)
+ @return NO if the Lua code threw an exception, otherwise YES
+ @param nargs An integer specifying how many function arguments you have pushed onto the stack
+ @param nresults An integer specifying how many return values the Lua function will push onto the stack
+ @param message An NSString message to include in the error log
+ */
+- (BOOL)protectedCallAndError:(NSString*)message nargs:(int)nargs nresults:(int)nresults;
 
 #pragma mark - Methods for registering libraries with Lua
 
@@ -398,6 +437,15 @@ NSString *specMaskToString(int spec);
  @param object an NSObject
  */
 - (void)luaRelease:(int)refTable forNSObject:(id)object ;
+
+/*!
+  @abstract Checks a list of Lua references for validity
+
+  @discussion This compares each argument against LUA_REFNIL and LUA_NOREF. If any of the supplied arguments contain either of those values, this method returns NO. It does not guarantee that the references are valid within the Lua environment, simply that they have not been explicitly invalited.
+  @param firstRef - An integer containing a Lua reference. Followed by zero or more integers containing other Lua references. The final value MUST be LS_RBREAK.
+  @return YES or NO indicating whether all of the supplied references are valid or not
+ */
+- (BOOL)checkRefs:(int)firstRef, ...;
 
 /*!
  @abstract Stores a reference for an NSObject in the supplied table.
@@ -694,6 +742,15 @@ NSString *specMaskToString(int spec);
  @returns YES if the module loaded successfully or NO if it does not
  */
 - (BOOL)requireModule:(const char *)moduleName ;
+
+/*!
+ @abstract Increases the size of Lua's stack
+
+ @discussion This should be used before pushing items onto the stack. Each Lua->C transition is guaranteed to provide only 20 stack slots. It therefore seems wise to request more slots if we're going to be pushing things.
+ @warning If the stack size cannot be increased, a luaL_error() will be thrown
+ @param slots The number of additional slots to add to the stack
+ */
+- (void)growStack:(int)slots withMessage:(const char *)message;
 
 #pragma mark - Logging methods
 

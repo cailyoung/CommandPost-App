@@ -35,23 +35,22 @@ static int refTable = LUA_NOREF;
 
 - (void) sound:(NSSound __unused *)sound didFinishPlaying:(BOOL)playbackSuccessful {
     dispatch_async(dispatch_get_main_queue(), ^{
-        LuaSkin *skin = [LuaSkin shared];
+        LuaSkin *skin = [LuaSkin sharedWithState:NULL];
+        _lua_stackguard_entry(skin.L);
 //         [skin logVerbose:[NSString stringWithFormat:@"%s:in delegate", USERDATA_TAG]] ;
-        if (_callbackRef != LUA_NOREF) {
+        if (self->_callbackRef != LUA_NOREF) {
             lua_State *L = skin.L;
 
-            [skin pushLuaRef:refTable ref:_callbackRef];
+            [skin pushLuaRef:refTable ref:self->_callbackRef];
             lua_pushboolean(L, playbackSuccessful);
             [skin pushNSObject:self];
-            if (![skin protectedCallAndTraceback:2 nresults:0]) {
-                [skin logError:[skin toNSObjectAtIndex:-1]] ;
-                lua_pop(L, 1) ;
-            }
+            [skin protectedCallAndError:@"hs.sound:didFinishPlaying callback" nargs:2 nresults:0];
         }
         // a completed song should rely solely on user saved userdata values to prevent __gc
         // since there will be no other way to access it once this point is reached if it hasn't
         // been saved in a variable somewhere.
-        _selfRef = [skin luaUnref:refTable ref:_selfRef] ;
+        self->_selfRef = [skin luaUnref:refTable ref:self->_selfRef] ;
+        _lua_stackguard_exit(skin.L);
     }) ;
 }
 
@@ -72,7 +71,7 @@ static int refTable = LUA_NOREF;
 /// Notes:
 ///  * Sounds can only be loaded by name if they are System Sounds (i.e. those found in ~/Library/Sounds, /Library/Sounds, /Network/Library/Sounds and /System/Library/Sounds) or are sound files that have previously been loaded and named
 static int sound_byname(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TSTRING | LS_TNUMBER, LS_TBREAK] ;
     luaL_checkstring(L, 1) ; // force number to be a string
     NSSound* theSound = [NSSound soundNamed:[skin toNSObjectAtIndex:1]] ;
@@ -94,7 +93,7 @@ static int sound_byname(lua_State* L) {
 /// Returns:
 ///  * An `hs.sound` object or nil if the file could not be loaded
 static int sound_byfile(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TSTRING | LS_TNUMBER, LS_TBREAK] ;
     luaL_checkstring(L, 1) ; // force number to be a string
     NSSound* theSound = [[NSSound alloc] initWithContentsOfFile:[skin toNSObjectAtIndex:1] byReference: NO] ;
@@ -119,7 +118,7 @@ static int sound_byfile(lua_State* L) {
 /// Notes:
 ///  * The sounds listed by this function can be loaded using `hs.sound.getByName()`
 static int sound_systemSounds(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TBREAK] ;
     int i = 0;
 
@@ -149,8 +148,8 @@ static int sound_systemSounds(lua_State* L) {
 ///
 /// Returns:
 ///  * A table containing the UTI sound formats that are supported by the system
-static int sound_soundUnfilteredTypes(__unused lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+static int sound_soundUnfilteredTypes(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TBREAK] ;
     [skin pushNSObject:[NSSound soundUnfilteredTypes]];
     return 1;
@@ -169,7 +168,7 @@ static int sound_soundUnfilteredTypes(__unused lua_State* L) {
 /// Notes:
 ///  * This function is unlikely to be tremendously useful, as filename extensions are essentially meaningless. The data returned by `hs.sound.soundTypes()` is far more valuable
 static int sound_soundUnfilteredFileTypes(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TBREAK] ;
     if ([NSSound respondsToSelector:@selector(soundUnfilteredFileTypes)]) {
 #pragma clang diagnostic push
@@ -194,7 +193,7 @@ static int sound_soundUnfilteredFileTypes(lua_State* L) {
 /// Returns:
 ///  * The `hs.sound` object if the command was successful, otherwise false.
 static int sound_play(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK] ;
     HSSoundObject *obj = [skin luaObjectAtIndex:1 toClass:"HSSoundObject"] ;
     if ([obj.soundObject play]) {
@@ -219,7 +218,7 @@ static int sound_play(lua_State* L) {
 /// Returns:
 ///  * The `hs.sound` object if the command was successful, otherwise false.
 static int sound_pause(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK] ;
     NSSound *obj = [skin luaObjectAtIndex:1 toClass:"NSSound"] ;
     if ([obj pause]) {
@@ -240,7 +239,7 @@ static int sound_pause(lua_State* L) {
 /// Returns:
 ///  * The `hs.sound` object if the command was successful, otherwise false.
 static int sound_resume(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK] ;
     NSSound *obj = [skin luaObjectAtIndex:1 toClass:"NSSound"] ;
     if ([obj resume]) {
@@ -261,7 +260,7 @@ static int sound_resume(lua_State* L) {
 /// Returns:
 ///  * The `hs.sound` object if the command was successful, otherwise false.
 static int sound_stop(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK] ;
     NSSound *obj = [skin luaObjectAtIndex:1 toClass:"NSSound"] ;
     if ([obj stop]) {
@@ -285,7 +284,7 @@ static int sound_stop(lua_State* L) {
 /// Notes:
 ///  * If you have registered a callback function for completion of a sound's playback, it will not be called when the sound loops
 static int sound_loopSound(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBOOLEAN | LS_TOPTIONAL, LS_TBREAK] ;
     NSSound *obj = [skin luaObjectAtIndex:1 toClass:"NSSound"] ;
     if (lua_gettop(L) == 2) {
@@ -310,7 +309,7 @@ static int sound_loopSound(lua_State* L) {
 /// Notes:
 ///  * This method can only be used on a named `hs.sound` object, see `hs.sound:name()`
 static int sound_stopOnRelease(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBOOLEAN | LS_TOPTIONAL, LS_TBREAK] ;
     HSSoundObject *obj = [skin luaObjectAtIndex:1 toClass:"HSSoundObject"] ;
     if (lua_gettop(L) == 2) {
@@ -339,7 +338,7 @@ static int sound_stopOnRelease(lua_State* L) {
 /// Notes:
 ///  * If remove the sound name by specifying `nil`, the sound will automatically be set to stop when Hammerspoon is reloaded.
 static int sound_name(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING | LS_TNUMBER | LS_TNIL | LS_TOPTIONAL, LS_TBREAK] ;
     HSSoundObject *obj = [skin luaObjectAtIndex:1 toClass:"HSSoundObject"] ;
     if (lua_gettop(L) == 2) {
@@ -369,7 +368,7 @@ static int sound_name(lua_State* L) {
 /// Notes:
 ///  * To obtain the UID of a sound device, see `hs.audiodevice:uid()`
 static int sound_device(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING | LS_TNUMBER | LS_TNIL | LS_TOPTIONAL, LS_TBREAK] ;
     NSSound *obj = [skin luaObjectAtIndex:1 toClass:"NSSound"] ;
     if (lua_gettop(L) == 2) {
@@ -401,7 +400,7 @@ static int sound_device(lua_State* L) {
 /// Returns:
 ///  * If a parameter is provided, returns the sound object; otherwise returns the current position.
 static int sound_currentTime(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TNUMBER | LS_TOPTIONAL, LS_TBREAK] ;
     NSSound *obj = [skin luaObjectAtIndex:1 toClass:"NSSound"] ;
     if (lua_gettop(L) == 2) {
@@ -423,7 +422,7 @@ static int sound_currentTime(lua_State* L) {
 /// Returns:
 ///  * A number containing the length of the sound, in seconds
 static int sound_duration(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK] ;
     NSSound *obj = [skin luaObjectAtIndex:1 toClass:"NSSound"] ;
     lua_pushnumber(L, [obj duration]);
@@ -440,7 +439,7 @@ static int sound_duration(lua_State* L) {
 /// Returns:
 ///  * If a parameter is provided, returns the sound object; otherwise returns the current value.
 static int sound_volume(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TNUMBER | LS_TOPTIONAL, LS_TBREAK] ;
     NSSound *obj = [skin luaObjectAtIndex:1 toClass:"NSSound"] ;
     if (lua_gettop(L) == 2) {
@@ -462,7 +461,7 @@ static int sound_volume(lua_State* L) {
 /// Returns:
 ///  * A boolean, true if the sound is currently playing, otherwise false
 static int sound_isPlaying(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK] ;
     NSSound *obj = [skin luaObjectAtIndex:1 toClass:"NSSound"] ;
     lua_pushboolean(L, [obj isPlaying]);
@@ -484,7 +483,7 @@ static int sound_isPlaying(lua_State* L) {
 ///    * state - a boolean flag indicating if the sound completed playing.  Returns true if playback completes properly, or false if a decoding error occurs or if the sound is stopped early with `hs.sound:stop`.
 ///    * sound - the soundObject userdata
 static int sound_callback(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TFUNCTION | LS_TNIL, LS_TBREAK] ;
     HSSoundObject *obj = [skin luaObjectAtIndex:1 toClass:"HSSoundObject"] ;
     // in either case, we need to remove an existing callback, so...
@@ -511,7 +510,7 @@ static int sound_callback(lua_State* L) {
 
 // pushes HSSoundObject userdata onto stack, or reuses selfRef, if defined
 static int pushHSSoundObject(lua_State *L, id obj) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     HSSoundObject *value = obj ;
     if (value.selfRef != LUA_NOREF) {
         [skin pushLuaRef:refTable ref:value.selfRef] ;
@@ -526,7 +525,7 @@ static int pushHSSoundObject(lua_State *L, id obj) {
 
 // retrieves userdata on stack as HSSoundObject
 static id toHSSoundObjectFromLua(lua_State *L, int idx) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     HSSoundObject *value ;
     if (luaL_testudata(L, idx, USERDATA_TAG)) {
         value = get_objectFromUserdata(__bridge HSSoundObject, L, idx) ;
@@ -538,15 +537,15 @@ static id toHSSoundObjectFromLua(lua_State *L, int idx) {
 }
 
 // creates new HSSoundObject from NSSound and pushes userdata onto stack
-static int pushNSSound(__unused lua_State *L, id obj) {
-    LuaSkin *skin = [LuaSkin shared] ;
+static int pushNSSound(lua_State *L, id obj) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     HSSoundObject *value = [[HSSoundObject alloc] initWithSound:obj] ;
     return [skin pushNSObject:value] ;
 }
 
 // retrieves userdata on stack as HSSoundObject, but returns NSSound portion only
-static id toNSSoundFromLua(__unused lua_State *L, int idx) {
-    LuaSkin *skin = [LuaSkin shared] ;
+static id toNSSoundFromLua(lua_State *L, int idx) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     HSSoundObject *value = [skin luaObjectAtIndex:idx toClass:"HSSoundObject"];
     return [value soundObject];
 }
@@ -554,7 +553,7 @@ static id toNSSoundFromLua(__unused lua_State *L, int idx) {
 #pragma mark - Hammerspoon/Lua Infrastructure
 
 static int userdata_tostring(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     HSSoundObject *obj = [skin luaObjectAtIndex:1 toClass:"HSSoundObject"] ;
     NSString *title = [obj.soundObject name] ;
     if (!title) title = @"(unnamed sound)" ;
@@ -566,7 +565,7 @@ static int userdata_eq(lua_State* L) {
 // can't get here if at least one of us isn't a userdata type, and we only care if both types are ours,
 // so use luaL_testudata before the macro causes a lua error
     if (luaL_testudata(L, 1, USERDATA_TAG) && luaL_testudata(L, 2, USERDATA_TAG)) {
-        LuaSkin *skin = [LuaSkin shared] ;
+        LuaSkin *skin = [LuaSkin sharedWithState:L] ;
         HSSoundObject *obj1 = [skin luaObjectAtIndex:1 toClass:"HSSoundObject"] ;
         HSSoundObject *obj2 = [skin luaObjectAtIndex:2 toClass:"HSSoundObject"] ;
         lua_pushboolean(L, [obj1 isEqualTo:obj2]) ;
@@ -577,7 +576,7 @@ static int userdata_eq(lua_State* L) {
 }
 
 static int userdata_gc(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
 //     [skin logVerbose:[NSString stringWithFormat:@"%s:__gc", USERDATA_TAG]] ;
     HSSoundObject *obj = get_objectFromUserdata(__bridge_transfer HSSoundObject, L, 1) ;
     if (obj) {
@@ -636,8 +635,8 @@ static luaL_Reg moduleLib[] = {
 //     {NULL,   NULL}
 // };
 
-int luaopen_hs_sound_internal(lua_State* __unused L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+int luaopen_hs_sound_internal(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     refTable = [skin registerLibraryWithObject:USERDATA_TAG
                                      functions:moduleLib
                                  metaFunctions:nil    // or module_metaLib

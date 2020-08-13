@@ -30,7 +30,7 @@
 ---    * `notifyOnExit`  - a boolean specifying whether or not a callback with the "didExitRegion" message should be generated when the machine exits the region. When not specified in a table being used as an argument, this defaults to true.
 
 local USERDATA_TAG   = "hs.location"
-local GEOCODE_UD_TAG = USERDATA_TAG .. ".geocode"
+--local GEOCODE_UD_TAG = USERDATA_TAG .. ".geocode"
 
 local module       = require(USERDATA_TAG..".internal")
 local host         = require("hs.host")
@@ -58,7 +58,7 @@ local __dispatch = function(msg, ...)
             if id == "legacy" then
             -- handle legacy callbacks
                 local locationNow = module.get()
-                for tag, callback in pairs(legacyCallbacks) do
+                for _, callback in pairs(legacyCallbacks) do
                     if not(callback.distance and module.distance(locationNow, callback.last) < callback.distance) then
                         callback.last = {
                             latitude = locationNow.latitude,
@@ -70,8 +70,8 @@ local __dispatch = function(msg, ...)
                 end
             else
                 local _self = objectInternals[id]
-                if _self and _self.callback then
-                    _self.callback(self, msg, ...)
+                if _self and _self._callbk then
+                    _self._callbk(_self, msg, ...)
                 end
             end
         end
@@ -81,7 +81,7 @@ local __dispatch = function(msg, ...)
             if type(k) == "string" then
                 local id, _self = k, v
 
-                if _self.callback then
+                if _self._callbk then
                     if msg:match("Region$") then
                         local args = table.pack(...)
                         local originalID = args[1].identifier
@@ -97,10 +97,10 @@ local __dispatch = function(msg, ...)
                             args[1].notifyOnExit  = _self.regions[originalID].notifyOnExit
                             -- return the objects name for the region, not the internal one
                             args[1].identifier = _self.regions[originalID].identifier
-                            _self.callback(self, msg, table.unpack(args))
+                            _self._callbk(_self, msg, table.unpack(args))
                         end
                     else
-                        _self.callback(self, msg, ...)
+                        _self._callbk(_self, msg, ...)
                     end
                 end
             end
@@ -207,168 +207,13 @@ end
 ---
 --- Returns:
 ---  * None
-module.stop = function(...)
+module.stop = function()
     -- if startedFor is not empty, then clear for legacy
     if next(startedFor) then
         startedFor.legacy = nil
         -- now, if startedFor *is* empty, then actually stop
         if not next(startedFor) then locationStop() end
     end
-end
-
--- -------- Functions related to sunrise/sunset times -----------------
-
-local rad = math.rad
-local deg = math.deg
-local floor = math.floor
-local frac = function(n) return n - floor(n) end
-local cos = function(d) return math.cos(rad(d)) end
-local acos = function(d) return deg(math.acos(d)) end
-local sin = function(d) return math.sin(rad(d)) end
-local asin = function(d) return deg(math.asin(d)) end
-local tan = function(d) return math.tan(rad(d)) end
-local atan = function(d) return deg(math.atan(d)) end
-
-local function fit_into_range(val, min, max)
-   local range = max - min
-   local count
-   if val < min then
-      count = floor((min - val) / range) + 1
-      return val + count * range
-   elseif val >= max then
-      count = floor((val - max) / range) + 1
-      return val - count * range
-   else
-      return val
-   end
-end
-
-local function day_of_year(date)
-   local n1 = floor(275 * date.month / 9)
-   local n2 = floor((date.month + 9) / 12)
-   local n3 = (1 + floor((date.year - 4 * floor(date.year / 4) + 2) / 3))
-   return n1 - (n2 * n3) + date.day - 30
-end
-
-local function sunturn_time(date, rising, latitude, longitude, zenith, local_offset)
-   local n = day_of_year(date)
-
-   -- Convert the longitude to hour value and calculate an approximate time
-   local lng_hour = longitude / 15
-
-   local t
-   if rising then -- Rising time is desired
-      t = n + ((6 - lng_hour) / 24)
-   else -- Setting time is desired
-      t = n + ((18 - lng_hour) / 24)
-   end
-
-   -- Calculate the Sun's mean anomaly
-   local M = (0.9856 * t) - 3.289
-
-   -- Calculate the Sun's true longitude
-   local L = fit_into_range(M + (1.916 * sin(M)) + (0.020 * sin(2 * M)) + 282.634, 0, 360)
-
-   -- Calculate the Sun's right ascension
-   local RA = fit_into_range(atan(0.91764 * tan(L)), 0, 360)
-
-   -- Right ascension value needs to be in the same quadrant as L
-   local Lquadrant  = floor(L / 90) * 90
-   local RAquadrant = floor(RA / 90) * 90
-   RA = RA + Lquadrant - RAquadrant
-
-   -- Right ascension value needs to be converted into hours
-   RA = RA / 15
-
-   -- Calculate the Sun's declination
-   local sinDec = 0.39782 * sin(L)
-   local cosDec = cos(asin(sinDec))
-
-   -- Calculate the Sun's local hour angle
-   local cosH = (cos(zenith) - (sinDec * sin(latitude))) / (cosDec * cos(latitude))
-
-   if rising and cosH > 1 then
-      return "N/R" -- The sun never rises on this location on the specified date
-   elseif cosH < -1 then
-      return "N/S" -- The sun never sets on this location on the specified date
-   end
-
-   -- Finish calculating H and convert into hours
-   local H
-   if rising then
-      H = 360 - acos(cosH)
-   else
-      H = acos(cosH)
-   end
-   H = H / 15
-
-   -- Calculate local mean time of rising/setting
-   local T = H + RA - (0.06571 * t) - 6.622
-
-   -- Adjust back to UTC
-   local UT = fit_into_range(T - lng_hour, 0, 24)
-
-   -- Convert UT value to local time zone of latitude/longitude
-   local LT =  UT + local_offset
-
-   return os.time({ day = date.day, month = date.month, year = date.year,
-                    hour = floor(LT), min = floor(frac(LT) * 60), sec = floor(frac(LT) * 3600) % 60 })
-end
-
---- hs.location.sunrise(latitude, longitude, offset[, date]) -> number or string
---- Function
---- Returns the time of official sunrise for the supplied location
----
---- Parameters:
----  * `latitude`  - A number containing a latitude
----  * `longitude` - A number containing a longitude
----  * `offset`    - A number containing the offset from UTC (in hours) for the given latitude/longitude
----  * `date`      - An optional table containing date information (equivalent to the output of ```os.date("*t")```). Defaults to the current date
----
---- Returns:
----  * A number containing the time of sunrise (represented as seconds since the epoch) for the given date. If no date is given, the current date is used. If the sun doesn't rise on the given day, the string "N/R" is returned.
----
---- Notes:
----  * You can turn the return value into a more useful structure, with ```os.date("*t", returnvalue)```
----  * For compatibility with the locationTable object returned by [hs.location.get](#get), this function can also be invoked as `hs.location.sunrise(locationTable, offset[, date])`.
-module.sunrise = function (lat, lon, offset, date)
-    if type(lat) == "table" then
-        offset, date = lon, offset
-        lat, lon = lat.latitude, lat.longitude
-    end
-    local zenith = 90.83
-    if not date then
-        date = os.date("*t")
-    end
-    return sunturn_time(date, true, lat, lon, zenith, offset)
-end
-
---- hs.location.sunset(latitude, longitude, offset[, date]) -> number or string
---- Function
---- Returns the time of official sunset for the supplied location
----
---- Parameters:
----  * `latitude`  - A number containing a latitude
----  * `longitude` - A number containing a longitude
----  * `offset`    - A number containing the offset from UTC (in hours) for the given latitude/longitude
----  * `date`      - An optional table containing date information (equivalent to the output of ```os.date("*t")```). Defaults to the current date
----
---- Returns:
----  * A number containing the time of sunset (represented as seconds since the epoch) for the given date. If no date is given, the current date is used. If the sun doesn't set on the given day, the string "N/S" is returned.
----
---- Notes:
----  * You can turn the return value into a more useful structure, with ```os.date("*t", returnvalue)```
----  * For compatibility with the locationTable object returned by [hs.location.get](#get), this function can also be invoked as `hs.location.sunset(locationTable, offset[, date])`.
-module.sunset = function (lat, lon, offset, date)
-    if type(lat) == "table" then
-        offset, date = lon, offset
-        lat, lon = lat.latitude, lat.longitude
-    end
-    local zenith = 90.83
-    if not date then
-        date = os.date("*t")
-    end
-    return sunturn_time(date, false, lat, lon, zenith, offset)
 end
 
 -- hs.location independant objects
@@ -398,9 +243,9 @@ objectMT.__eq = function(self, other)
     return self.id == other.id
 end
 objectMT.__gc = function(self)
-    self.callback = nil
+    self._callbk = nil
     self:stopTracking()
-    for i,v in ipairs(self:monitoredRegions()) do self:removeMonitoredRegion(v.identifier) end
+    for _,v in ipairs(self:monitoredRegions()) do self:removeMonitoredRegion(v.identifier) end
     -- yeah, internal gc will get these, but it takes two passes to get both, so lets just kill both at once
     objectInternals[self.id] = nil
     objectInternals[self] = nil
@@ -490,7 +335,7 @@ objectMT.monitoredRegions = function(self)
     local regions = monitoredRegions()
     if regions then
         local results = {}
-        for i, v in ipairs(regions) do
+        for _, v in ipairs(regions) do
             if self.regions[v.identifier] then
                 table.insert(results, v)
                 -- [CLLocationManager monitoredRegions] returns a copy of the region data being
@@ -604,7 +449,7 @@ objectMT.currentRegion = function(self)
     local location, regions = self:location(), self:monitoredRegions()
     local currentRegion, currentRadius = nil, math.huge
     if location then
-        for i,v in ipairs(regions) do
+        for _,v in ipairs(regions) do
             if module.distance(location, v) < v.radius and v.radius < currentRadius then
                 currentRadius, currentRegion = v.radius, v.identifier
             end
@@ -637,7 +482,7 @@ objectMT.callback = function(self, ...)
     if args.n == 1 then
         local fn = args[1]
         if type(fn) == "function" or type(fn) == "nil" then
-            self.callback = fn
+            self._callbk = fn
         else
             error("expeected a function or nil, found " .. type(fn), 2)
         end
@@ -661,7 +506,7 @@ end
 ---  * This function activates Location Services for Hammerspoon, so the first time you call this, you may be prompted to authorise Hammerspoon to use Location Services.
 ---  * If access to Location Services is enabled for Hammerspoon, this function will return the most recent cached data for the computer's location.
 ---    * Internally, the Location Services cache is updated whenever additional WiFi networks are detected or lost (not necessarily joined). When update tracking is enabled with the [hs.location.start](#start) function, calculations based upon the RSSI of all currently seen networks are preformed more often to provide a more precise fix, but it's still based on the WiFi networks near you.
-objectMT.location = function(self)
+objectMT.location = function()
     return module.get()
 end
 
@@ -687,7 +532,7 @@ internal._stop                  = locationStop          -- actual module stop fu
 internal._debugHelp = function()
     local results = "Debugging keys for " .. USERDATA_TAG .. " are:\n"
     local size = 0
-    for k, v in pairs(internal) do if #k > size then size = #k end end
+    for k, _ in pairs(internal) do if #k > size then size = #k end end
     for k, v in require("hs.fnutils").sortByKeys(internal) do
         results = results .. string.format("    %-" .. tostring(size) .. "s %s\n", k, tostring(v))
     end

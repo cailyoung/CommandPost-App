@@ -12,6 +12,32 @@ static int refTable = LUA_NOREF;
 
 #define get_objectFromUserdata(objType, L, idx, tag) (objType*)*((void**)luaL_checkudata(L, idx, tag))
 
+#pragma mark - String Conversion
+
+@implementation NSData (NSData_Conversion)
+- (NSString *)hexadecimalString
+{
+    /* Returns hexadecimal string of NSData. Empty string if data is empty.   */
+
+    const unsigned char *dataBuffer = (const unsigned char *)[self bytes];
+
+    if (!dataBuffer)
+    {
+        return [NSString string];
+    }
+
+    NSUInteger          dataLength  = [self length];
+    NSMutableString     *hexString  = [NSMutableString stringWithCapacity:(dataLength * 2)];
+
+    for (int i = 0; i < dataLength; ++i)
+    {
+        [hexString appendFormat:@"%02x", (unsigned int)dataBuffer[i]];
+    }
+
+    return [NSString stringWithString:hexString];
+}
+@end
+
 #pragma mark - Support Functions and Classes
 
 //
@@ -161,7 +187,7 @@ static int refTable = LUA_NOREF;
 - (void)startSynthesize
 {
     MIKMIDISourceEndpoint *endpoint = self.midiDevice.entities.firstObject.sources.firstObject;
-    _synth = [[MIKMIDIEndpointSynthesizer alloc] initWithMIDISource:endpoint];
+    _synth = [[MIKMIDIEndpointSynthesizer alloc] initWithMIDISource:endpoint error:NULL];
 }
 
 //
@@ -207,8 +233,7 @@ static int refTable = LUA_NOREF;
     for (MIKMIDIDestinationEndpoint *destination in destinations) {
         NSError *error = nil;
         if (![self.midiDeviceManager sendCommands:@[command] toEndpoint:destination error:&error]) {
-            LuaSkin *skin = [LuaSkin shared] ;
-            [skin logError:[NSString stringWithFormat:@"Unable to send command %@ to endpoint %@: %@", command, destination, error]] ;
+            [LuaSkin logError:[NSString stringWithFormat:@"Unable to send command %@ to endpoint %@: %@", command, destination, error]] ;
         }
     }
 }
@@ -226,8 +251,8 @@ static int refTable = LUA_NOREF;
     if (context == midiKVOContext) {
         if (([keyPath isEqualToString:@"availableDevices"]) || ([keyPath isEqualToString:@"virtualSources"])) {
             if (_deviceCallbackRef != LUA_NOREF) {
-                LuaSkin *skin = [LuaSkin shared] ;
-                lua_State *L  = [skin L] ;
+                LuaSkin *skin = [LuaSkin sharedWithState:NULL] ;
+                _lua_stackguard_entry(skin.L);
                 [skin pushLuaRef:refTable ref:_deviceCallbackRef] ;
 
                 //
@@ -239,7 +264,6 @@ static int refTable = LUA_NOREF;
                     if ([device name]) {
                         [deviceNames addObject:[device name]];
                     }
-
                 }
 
                 //
@@ -256,12 +280,8 @@ static int refTable = LUA_NOREF;
 
                 [skin pushNSObject:deviceNames];
                 [skin pushNSObject:virtualDeviceNames];
-
-                if (![skin protectedCallAndTraceback:2 nresults:0]) {
-                    NSString *errorMessage = [skin toNSObjectAtIndex:-1] ;
-                    lua_pop(L, 1) ;
-                    [skin logError:[NSString stringWithFormat:@"%s:deviceCallback callback error:%@", USERDATA_TAG, errorMessage]] ;
-                }
+                [skin protectedCallAndError:@"hs.midi:deviceCallback" nargs:2 nresults:0];
+                _lua_stackguard_exit(skin.L);
             }
         }
     }
@@ -286,7 +306,7 @@ HSMIDIDeviceManager *watcherDeviceManager;
 /// Returns:
 ///  * A table containing the names of any physically connected MIDI devices as strings.
 static int devices(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     NSArray *availableMIDIDevices = [[MIKMIDIDeviceManager sharedDeviceManager] availableDevices];
     NSMutableArray *deviceNames = [NSMutableArray array];
     for (MIKMIDIDevice * device in availableMIDIDevices)
@@ -307,7 +327,7 @@ static int devices(lua_State *L) {
 /// Returns:
 ///  * A table containing the names of any virtual MIDI sources as strings.
 static int virtualSources(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     NSArray *virtualSources = [[MIKMIDIDeviceManager sharedDeviceManager] virtualSources];
     NSMutableArray *deviceNames = [NSMutableArray array];
     for (MIKMIDIDevice * device in virtualSources)
@@ -344,7 +364,7 @@ static int deviceCallback(lua_State *L) {
     //
     // Check Arguments:
     //
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TFUNCTION | LS_TNIL, LS_TBREAK];
 
     //
@@ -361,7 +381,7 @@ static int deviceCallback(lua_State *L) {
         [watcherDeviceManager watchDevices];
     }
     else {
-//         [watcherDeviceManager unwatchDevices];
+        //         [watcherDeviceManager unwatchDevices];
         watcherDeviceManager = nil ;
     }
 
@@ -373,7 +393,7 @@ static int deviceCallback(lua_State *L) {
 /// Creates a new `hs.midi` object.
 ///
 /// Parameters:
-///  * deviceName - A string containing the device name of the MIDI device. A valid device name can be found by checking `hs.midi.getDevices()` and/or `hs.midi.virtualSources()`.
+///  * deviceName - A string containing the device name of the MIDI device. A valid device name can be found by checking `hs.midi.devices()` and/or `hs.midi.virtualSources()`.
 ///
 /// Returns:
 ///  * An `hs.midi` object or `nil` if an error occured.
@@ -382,7 +402,7 @@ static int deviceCallback(lua_State *L) {
 ///  * Example Usage:
 ///    `hs.midi.new(hs.midi.devices()[1])`
 static int midi_new(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TSTRING, LS_TBREAK] ;
     HSMIDIDeviceManager *manager = [[HSMIDIDeviceManager alloc] init] ;
     bool result = [manager setPhysicalDevice:[skin toNSObjectAtIndex:1]];
@@ -409,7 +429,7 @@ static int midi_new(lua_State *L) {
 ///  * Example Usage:
 ///    `hs.midi.new(hs.midi.virtualSources()[1])`
 static int midi_newVirtualSource(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TSTRING, LS_TBREAK] ;
     HSMIDIDeviceManager *manager = [[HSMIDIDeviceManager alloc] init] ;
     bool result = [manager setVirtualDevice:[skin toNSObjectAtIndex:1]];
@@ -436,7 +456,7 @@ static int midi_newVirtualSource(lua_State *L) {
 ///
 /// Notes:
 ///  * Most MIDI keyboards produce a `noteOn` when you press a key, then `noteOff` when you release. However, some MIDI keyboards will return a `noteOn` with 0 `velocity` instead of `noteOff`, so you will recieve two `noteOn` commands for every key press/release.
-///  * The callback function should expect 8 arguments and should not return anything:
+///  * The callback function should expect 5 arguments and should not return anything:
 ///    * `object`       - The `hs.midi` object.
 ///    * `deviceName`   - The device name as a string.
 ///    * `commandType`  - Type of MIDI message as defined as a string. See `hs.midi.commandTypes[]` for a list of possibilities.
@@ -448,63 +468,63 @@ static int midi_newVirtualSource(lua_State *L) {
 ///    * `noteOff` - Note off command:
 ///      * note                - The note number for the command. Must be between 0 and 127.
 ///      * velocity            - The velocity for the command. Must be between 0 and 127.
-///      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+///      * channel             - The channel for the command. Must be a number between 15.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `noteOn` - Note on command:
 ///      * note                - The note number for the command. Must be between 0 and 127.
 ///      * velocity            - The velocity for the command. Must be between 0 and 127.
-///      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+///      * channel             - The channel for the command. Must be a number between 15.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `polyphonicKeyPressure` - Polyphonic key pressure command:
 ///      * note                - The note number for the command. Must be between 0 and 127.
 ///      * pressure            - Key pressure of the polyphonic key pressure message. In the range 0-127.
-///      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+///      * channel             - The channel for the command. Must be a number between 15.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `controlChange` - Control change command. This is the most common command sent by MIDI controllers:
 ///      * controllerNumber    - The MIDI control number for the command.
 ///      * controllerValue     - The controllerValue of the command. Only the lower 7-bits of this are used.
-///      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+///      * channel             - The channel for the command. Must be a number between 15.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * fourteenBitValue    - The 14-bit value of the command.
 ///      * fourteenBitCommand  - `true` if the command contains 14-bit value data otherwise, `false`.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `programChange` - Program change command:
 ///      * programNumber       - The program (aka patch) number. From 0-127.
-///      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+///      * channel             - The channel for the command. Must be a number between 15.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `channelPressure` - Channel pressure command:
 ///      * pressure            - Key pressure of the channel pressure message. In the range 0-127.
-///      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+///      * channel             - The channel for the command. Must be a number between 15.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `pitchWheelChange` - Pitch wheel change command:
 ///      * pitchChange         -  A 14-bit value indicating the pitch bend. Center is 0x2000 (8192). Valid range is from 0-16383.
-///      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+///      * channel             - The channel for the command. Must be a number between 15.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `systemMessage` - System message command:
-///      * dataByte1           - Data
-///      * dataByte2           - Data
+///      * dataByte1           - Data Byte 1 as integer.
+///      * dataByte2           - Data Byte 2 as integer.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `systemExclusive` - System message command:
@@ -512,70 +532,70 @@ static int midi_newVirtualSource(lua_State *L) {
 ///      * sysexChannel        - The channel of the message. Only valid for universal exclusive messages, will always be 0 for non-universal messages.
 ///      * sysexData           - The system exclusive data for the message. For universal messages subID's are included in sysexData, for non-universal messages, any device specific information (such as modelID, versionID or whatever manufactures decide to include) will be included in sysexData.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `systemTimecodeQuarterFrame` - System exclusive (SysEx) command:
-///      * dataByte1           - Data
-///      * dataByte2           - Data
+///      * dataByte1           - Data Byte 1 as integer.
+///      * dataByte2           - Data Byte 2 as integer.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `systemSongPositionPointer` - System song position pointer command:
-///      * dataByte1           - Data
-///      * dataByte2           - Data
+///      * dataByte1           - Data Byte 1 as integer.
+///      * dataByte2           - Data Byte 2 as integer.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `systemSongSelect` - System song select command:
-///      * dataByte1           - Data
-///      * dataByte2           - Data
+///      * dataByte1           - Data Byte 1 as integer.
+///      * dataByte2           - Data Byte 2 as integer.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `systemTuneRequest` - System tune request command:
-///      * dataByte1           - Data
-///      * dataByte2           - Data
+///      * dataByte1           - Data Byte 1 as integer.
+///      * dataByte2           - Data Byte 2 as integer.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `systemTimingClock` - System timing clock command:
-///      * dataByte1           - Data
-///      * dataByte2           - Data
+///      * dataByte1           - Data Byte 1 as integer.
+///      * dataByte2           - Data Byte 2 as integer.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `systemStartSequence` - System timing clock command:
-///      * dataByte1           - Data
-///      * dataByte2           - Data
+///      * dataByte1           - Data Byte 1 as integer.
+///      * dataByte2           - Data Byte 2 as integer.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `systemContinueSequence` - System start sequence command:
-///      * dataByte1           - Data
-///      * dataByte2           - Data
+///      * dataByte1           - Data Byte 1 as integer.
+///      * dataByte2           - Data Byte 2 as integer.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `systemStopSequence` -  System continue sequence command:
-///      * dataByte1           - Data
-///      * dataByte2           - Data
+///      * dataByte1           - Data Byte 1 as integer.
+///      * dataByte2           - Data Byte 2 as integer.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///    * `systemKeepAlive` - System keep alive message:
-///      * dataByte1           - Data
-///      * dataByte2           - Data
+///      * dataByte1           - Data Byte 1 as integer.
+///      * dataByte2           - Data Byte 2 as integer.
 ///      * timestamp           - The timestamp for the command as a string.
-///      * data                - Raw MIDI Data as string.
+///      * data                - Raw MIDI Data as Hex String.
 ///      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
 ///
 ///  * Example Usage:
@@ -594,7 +614,7 @@ static int midi_callback(lua_State *L) {
     //
     // Check Arguments:
     //
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TFUNCTION | LS_TNIL, LS_TBREAK];
 
     //
@@ -642,13 +662,12 @@ static int midi_callback(lua_State *L) {
         id result;
         result = [manager connectInput:endpoint error:&error eventHandler:^(MIKMIDISourceEndpoint *source, NSArray<MIKMIDICommand *> *commands) {
             for (MIKMIDICommand *command in commands) {
-                LuaSkin *skin = [LuaSkin shared] ;
+                LuaSkin *skin = [LuaSkin sharedWithState:NULL] ;
                 if (wrapper.callbackRef != LUA_NOREF) {
 
                     //
                     // Update Callback Function:
                     //
-                    lua_State *_L = [skin L];
                     [skin pushLuaRef:refTable ref:wrapper.callbackRef];
 
                     //
@@ -773,12 +792,12 @@ static int midi_callback(lua_State *L) {
                         case MIKMIDICommandTypeNoteOff: {
                             //      * note                - The note number for the command. Must be between 0 and 127.
                             //      * velocity            - The velocity for the command. Must be between 0 and 127.
-                            //      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+                            //      * channel             - The channel for the command. Must be a number between 15.
                             //      * timestamp           - The timestamp for the command.
-                            //      * data                - Raw MIDI Data as string
+                            //      * data                - Raw MIDI Data as Hex String.
                             //      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
                             MIKMIDINoteOffCommand *noteCommand = (MIKMIDINoteOffCommand *)command;
-                            NSString *data = [[NSString alloc] initWithData:noteCommand.data encoding:NSUTF8StringEncoding];
+                            NSString *data = [noteCommand.data hexadecimalString];
                             lua_newtable(L) ;
                             lua_pushinteger(L, noteCommand.note);             lua_setfield(L, -2, "note");
                             lua_pushinteger(L, noteCommand.velocity);         lua_setfield(L, -2, "velocity");
@@ -791,12 +810,12 @@ static int midi_callback(lua_State *L) {
                         case MIKMIDICommandTypeNoteOn: {
                             //      * note                - The note number for the command. Must be between 0 and 127.
                             //      * velocity            - The velocity for the command. Must be between 0 and 127.
-                            //      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+                            //      * channel             - The channel for the command. Must be a number between 15.
                             //      * timestamp           - The timestamp for the command.
-                            //      * data                - Raw MIDI Data as string
+                            //      * data                - Raw MIDI Data as Hex String.
                             //      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
                             MIKMIDINoteOnCommand *noteCommand = (MIKMIDINoteOnCommand *)command;
-                            NSString *data = [[NSString alloc] initWithData:noteCommand.data encoding:NSUTF8StringEncoding];
+                            NSString *data = [noteCommand.data hexadecimalString];
                             lua_newtable(L) ;
                             lua_pushinteger(L, noteCommand.note);             lua_setfield(L, -2, "note");
                             lua_pushinteger(L, noteCommand.velocity);         lua_setfield(L, -2, "velocity");
@@ -809,12 +828,12 @@ static int midi_callback(lua_State *L) {
                         case MIKMIDICommandTypePolyphonicKeyPressure: {
                             //      * note                - The note number for the command. Must be between 0 and 127.
                             //      * pressure            - Key pressure of the polyphonic key pressure message. In the range 0-127.
-                            //      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+                            //      * channel             - The channel for the command. Must be a number between 15.
                             //      * timestamp           - The timestamp for the command.
-                            //      * data                - Raw MIDI Data as string
+                            //      * data                - Raw MIDI Data as Hex String.
                             //      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
                             MIKMIDIPolyphonicKeyPressureCommand *noteCommand = (MIKMIDIPolyphonicKeyPressureCommand *)command;
-                            NSString *data = [[NSString alloc] initWithData:noteCommand.data encoding:NSUTF8StringEncoding];
+                            NSString *data = [noteCommand.data hexadecimalString];
                             lua_newtable(L) ;
                             lua_pushinteger(L, noteCommand.note);             lua_setfield(L, -2, "note");
                             lua_pushinteger(L, noteCommand.pressure);         lua_setfield(L, -2, "pressure");
@@ -827,14 +846,14 @@ static int midi_callback(lua_State *L) {
                         case MIKMIDICommandTypeControlChange: {
                             //      * controllerNumber    - The MIDI control number for the command.
                             //      * controllerValue     - The controllerValue of the command. Only the lower 7-bits of this are used.
-                            //      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+                            //      * channel             - The channel for the command. Must be a number between 15.
                             //      * timestamp           - The timestamp for the command.
-                            //      * data                - Raw MIDI Data as string
+                            //      * data                - Raw MIDI Data as Hex String.
                             //      * fourteenBitValue    - The 14-bit value of the command.
                             //      * fourteenBitCommand  - `true` if the command contains 14-bit value data.
                             //      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
                             MIKMIDIControlChangeCommand *result = (MIKMIDIControlChangeCommand *)command;
-                            NSString *data = [[NSString alloc] initWithData:result.data encoding:NSUTF8StringEncoding];
+                            NSString *data = [result.data hexadecimalString];
                             lua_newtable(L) ;
                             lua_pushinteger(L, result.controllerNumber);             lua_setfield(L, -2, "controllerNumber");
                             lua_pushinteger(L, result.value);                        lua_setfield(L, -2, "controllerValue");
@@ -848,12 +867,12 @@ static int midi_callback(lua_State *L) {
                         }
                         case MIKMIDICommandTypeProgramChange: {
                             //      * programNumber       - The program (aka patch) number. From 0-127.
-                            //      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+                            //      * channel             - The channel for the command. Must be a number between 15.
                             //      * timestamp           - The timestamp for the command as a string.
-                            //      * data                - Raw MIDI Data as string
+                            //      * data                - Raw MIDI Data as Hex String.
                             //      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
                             MIKMIDIProgramChangeCommand *result = (MIKMIDIProgramChangeCommand *)command;
-                            NSString *data = [[NSString alloc] initWithData:result.data encoding:NSUTF8StringEncoding];
+                            NSString *data = [result.data hexadecimalString];
                             lua_newtable(L) ;
                             lua_pushinteger(L, result.programNumber);                lua_setfield(L, -2, "programNumber");
                             lua_pushinteger(L, result.channel);                      lua_setfield(L, -2, "channel");
@@ -864,12 +883,12 @@ static int midi_callback(lua_State *L) {
                         }
                         case MIKMIDICommandTypeChannelPressure: {
                             //      * pressure            - Key pressure of the channel pressure message. In the range 0-127.
-                            //      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+                            //      * channel             - The channel for the command. Must be a number between 15.
                             //      * timestamp           - The timestamp for the command as a string.
-                            //      * data                - Raw MIDI Data as string
+                            //      * data                - Raw MIDI Data as Hex String.
                             //      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
                             MIKMIDIChannelPressureCommand *result = (MIKMIDIChannelPressureCommand *)command;
-                            NSString *data = [[NSString alloc] initWithData:result.data encoding:NSUTF8StringEncoding];
+                            NSString *data = [result.data hexadecimalString];
                             lua_newtable(L) ;
                             lua_pushinteger(L, result.pressure);                     lua_setfield(L, -2, "pressure");
                             lua_pushinteger(L, result.channel);                      lua_setfield(L, -2, "channel");
@@ -880,12 +899,12 @@ static int midi_callback(lua_State *L) {
                         }
                         case MIKMIDICommandTypePitchWheelChange: {
                             //      * pitchChange         -  A 14-bit value indicating the pitch bend. Center is 0x2000 (8192). Valid range is from 0-16383.
-                            //      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+                            //      * channel             - The channel for the command. Must be a number between 15.
                             //      * timestamp           - The timestamp for the command as a string.
-                            //      * data                - Raw MIDI Data as string
+                            //      * data                - Raw MIDI Data as Hex String.
                             //      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
                             MIKMIDIPitchBendChangeCommand *result = (MIKMIDIPitchBendChangeCommand *)command;
-                            NSString *data = [[NSString alloc] initWithData:result.data encoding:NSUTF8StringEncoding];
+                            NSString *data = [result.data hexadecimalString];
                             lua_newtable(L) ;
                             lua_pushinteger(L, result.pitchChange);                 lua_setfield(L, -2, "pitchChange");
                             lua_pushinteger(L, result.channel);                     lua_setfield(L, -2, "channel");
@@ -895,13 +914,13 @@ static int midi_callback(lua_State *L) {
                             break;
                         }
                         case MIKMIDICommandTypeSystemMessage: {
-                            //      * dataByte1           - Data
-                            //      * dataByte2           - Data
+                            //      * dataByte1           - Data Byte 1 as integer.
+                            //      * dataByte2           - Data Byte 2 as integer.
                             //      * timestamp           - The timestamp for the command as a string.
-                            //      * data                - Raw MIDI Data as string
+                            //      * data                - Raw MIDI Data as Hex String.
                             //      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
                             MIKMIDISystemMessageCommand *result = (MIKMIDISystemMessageCommand *)command;
-                            NSString *data = [[NSString alloc] initWithData:result.data encoding:NSUTF8StringEncoding];
+                            NSString *data = [result.data hexadecimalString];
                             lua_newtable(L) ;
                             lua_pushinteger(L, result.dataByte1);                  lua_setfield(L, -2, "dataByte1");
                             lua_pushinteger(L, result.dataByte2);                  lua_setfield(L, -2, "dataByte2");
@@ -915,28 +934,28 @@ static int midi_callback(lua_State *L) {
                             //      * sysexChannel        - The channel of the message. Only valid for universal exclusive messages, will always be 0 for non-universal messages.
                             //      * sysexData           - The system exclusive data for the message. For universal messages subID's are included in sysexData, for non-universal messages, any device specific information (such as modelID, versionID or whatever manufactures decide to include) will be included in sysexData.
                             //      * timestamp           - The timestamp for the command as a string.
-                            //      * data                - Raw MIDI Data as string
+                            //      * data                - Raw MIDI Data as Hex String.
                             //      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
                             MIKMIDISystemExclusiveCommand *result = (MIKMIDISystemExclusiveCommand *)command;
-                            NSString *sysexData = [[NSString alloc] initWithData:result.sysexData encoding:NSUTF8StringEncoding];
-                            NSString *data = [[NSString alloc] initWithData:result.data encoding:NSUTF8StringEncoding];
+                            NSString *sysexData = [result.sysexData hexadecimalString];
+                            NSString *data = [result.data hexadecimalString];
                             lua_newtable(L) ;
                             lua_pushinteger(L, result.manufacturerID);             lua_setfield(L, -2, "manufacturerID");
                             lua_pushinteger(L, result.sysexChannel);               lua_setfield(L, -2, "sysexChannel");
-                            lua_pushstring(L, [sysexData UTF8String]);             lua_setfield(L, -2, "sysexData");
                             lua_pushstring(L, [timestamp UTF8String]);             lua_setfield(L, -2, "timestamp");
+                            lua_pushstring(L, [sysexData UTF8String]);             lua_setfield(L, -2, "sysexData");
                             lua_pushstring(L, [data UTF8String]);                  lua_setfield(L, -2, "data");
                             lua_pushboolean(L, isVirtual);                         lua_setfield(L, -2, "isVirtual");
                             break;
                         }
                         case MIKMIDICommandTypeSystemKeepAlive: {
-                            //      * dataByte1           - Data
-                            //      * dataByte2           - Data
+                            //      * dataByte1           - Data Byte 1 as integer.
+                            //      * dataByte2           - Data Byte 2 as integer.
                             //      * timestamp           - The timestamp for the command as a string.
-                            //      * data                - Raw MIDI Data as string
+                            //      * data                - Raw MIDI Data as Hex String.
                             //      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
                             MIKMIDISystemKeepAliveCommand *result = (MIKMIDISystemKeepAliveCommand *)command;
-                            NSString *data = [[NSString alloc] initWithData:result.data encoding:NSUTF8StringEncoding];
+                            NSString *data = [result.data hexadecimalString];
                             lua_newtable(L) ;
                             lua_pushinteger(L, result.dataByte1);                  lua_setfield(L, -2, "dataByte1");
                             lua_pushinteger(L, result.dataByte2);                  lua_setfield(L, -2, "dataByte2");
@@ -953,13 +972,13 @@ static int midi_callback(lua_State *L) {
                         case MIKMIDICommandTypeSystemStartSequence:
                         case MIKMIDICommandTypeSystemContinueSequence:
                         case MIKMIDICommandTypeSystemStopSequence: {
-                            //      * dataByte1           - Data
-                            //      * dataByte2           - Data
+                            //      * dataByte1           - Data Byte 1 as integer.
+                            //      * dataByte2           - Data Byte 2 as integer.
                             //      * timestamp           - The timestamp for the command as a string.
-                            //      * data                - Raw MIDI Data as string
+                            //      * data                - Raw MIDI Data as Hex String.
                             //      * isVirtual           - `true` if Virtual MIDI Source otherwise `false`.
                             MIKMIDISystemMessageCommand *result = (MIKMIDISystemMessageCommand *)command;
-                            NSString *data = [[NSString alloc] initWithData:result.data encoding:NSUTF8StringEncoding];
+                            NSString *data = [result.data hexadecimalString];
                             lua_newtable(L) ;
                             lua_pushinteger(L, result.dataByte1);                  lua_setfield(L, -2, "dataByte1");
                             lua_pushinteger(L, result.dataByte2);                  lua_setfield(L, -2, "dataByte2");
@@ -969,12 +988,7 @@ static int midi_callback(lua_State *L) {
                             break;
                         }
                     };
-
-                    if (![skin protectedCallAndTraceback:5 nresults:0]) {
-                        const char *errorMsg = lua_tostring(_L, -1);
-                        [skin logError:[NSString stringWithFormat:@"%s: %s", USERDATA_TAG, errorMsg]];
-                        lua_pop(_L, 1) ; // Remove error message from stack
-                    }
+                    [skin protectedCallAndError:@"hs.midi callback" nargs:5 nresults:0];
                 }
             }
         }];
@@ -1008,7 +1022,7 @@ static int midi_callback(lua_State *L) {
 ///  * Example Usage:
 ///    ```midiDevice:sendSysex("f07e7f06 01f7")```
 static int midi_sendSysex(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING, LS_TBREAK];
     HSMIDIDeviceManager *wrapper = [skin toNSObjectAtIndex:1] ;
     [wrapper sendSysex:[skin toNSObjectAtIndex:2]];
@@ -1100,7 +1114,7 @@ static int midi_sendSysex(lua_State *L) {
 ///     ```
 static int midi_sendCommand(lua_State *L) {
 
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING, LS_TTABLE, LS_TBREAK];
 
     //
@@ -1220,7 +1234,7 @@ static int midi_sendCommand(lua_State *L) {
     {
         //      * note                - The note number for the command. Must be between 0 and 127.
         //      * velocity            - The velocity for the command. Must be between 0 and 127.
-        //      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+        //      * channel             - The channel for the command. Must be a number between 15.
         MIKMIDINoteOffCommand *noteOff = [MIKMIDINoteOffCommand noteOffCommandWithNote:note velocity:velocity channel:channel timestamp:date];
         if (![wrapper.midiDeviceManager sendCommands:@[noteOff] toEndpoint:destinationEndpoint error:&error])
         {
@@ -1232,7 +1246,7 @@ static int midi_sendCommand(lua_State *L) {
     {
         //      * note                - The note number for the command. Must be between 0 and 127.
         //      * velocity            - The velocity for the command. Must be between 0 and 127.
-        //      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+        //      * channel             - The channel for the command. Must be a number between 15.
         MIKMIDINoteOnCommand *noteOn = [MIKMIDINoteOnCommand noteOnCommandWithNote:note velocity:velocity channel:channel timestamp:date];
         if (![wrapper.midiDeviceManager sendCommands:@[noteOn] toEndpoint:destinationEndpoint error:&error])
         {
@@ -1244,7 +1258,7 @@ static int midi_sendCommand(lua_State *L) {
     {
         //      * note                - The note number for the command. Must be between 0 and 127.
         //      * pressure            - Key pressure of the polyphonic key pressure message. In the range 0-127.
-        //      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+        //      * channel             - The channel for the command. Must be a number between 15.
         MIKMutableMIDIPolyphonicKeyPressureCommand *polyphonicKeyPressure = [[MIKMutableMIDIPolyphonicKeyPressureCommand alloc] init];
         polyphonicKeyPressure.note = note;
         polyphonicKeyPressure.pressure = pressure;
@@ -1258,7 +1272,7 @@ static int midi_sendCommand(lua_State *L) {
     {
         //      * controllerNumber    - The MIDI control number for the command.
         //      * controllerValue     - The controllerValue of the command. Only the lower 7-bits of this are used.
-        //      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+        //      * channel             - The channel for the command. Must be a number between 15.
         //      * fourteenBitValue    - The 14-bit value of the command. Must be between 0 and 16383. Defaults to 0.
         //      * fourteenBitCommand  - `true` if the command contains 14-bit value data otherwise, `false`.
         MIKMutableMIDIControlChangeCommand *controlChange = [[MIKMutableMIDIControlChangeCommand alloc] init];
@@ -1281,7 +1295,7 @@ static int midi_sendCommand(lua_State *L) {
     else if ([commandType isEqualToString:@"programChange"])
     {
         //      * programNumber       - The program (aka patch) number. From 0-127.
-        //      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+        //      * channel             - The channel for the command. Must be a number between 15.
         MIKMutableMIDIProgramChangeCommand *programChange = [[MIKMutableMIDIProgramChangeCommand alloc] init];
         programChange.programNumber = programNumber;
         programChange.channel = channel;
@@ -1294,7 +1308,7 @@ static int midi_sendCommand(lua_State *L) {
     else if ([commandType isEqualToString:@"channelPressure"])
     {
         //      * pressure            - Key pressure of the channel pressure message. In the range 0-127.
-        //      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+        //      * channel             - The channel for the command. Must be a number between 15.
         MIKMutableMIDIChannelPressureCommand *channelPressure = [[MIKMutableMIDIChannelPressureCommand alloc] init];
         channelPressure.pressure = pressure;
         channelPressure.channel = channel;
@@ -1307,7 +1321,7 @@ static int midi_sendCommand(lua_State *L) {
     else if ([commandType isEqualToString:@"pitchWheelChange"])
     {
         //      * pitchChange         -  A 14-bit value indicating the pitch bend. Center is 0x2000 (8192). Valid range is from 0-16383.
-        //      * channel             - The channel for the command. Must be a number between 0 and 16. 0 sends the command to All Channels.
+        //      * channel             - The channel for the command. Must be a number between 15.
         MIKMutableMIDIPitchBendChangeCommand *pitchWheelChange = [[MIKMutableMIDIPitchBendChangeCommand alloc] init];
         pitchWheelChange.pitchChange = pitchChange;
         pitchWheelChange.channel = channel;
@@ -1350,7 +1364,7 @@ static int midi_sendCommand(lua_State *L) {
 ///   midiDevice:identityRequest()
 ///   ```
 static int midi_identityRequest(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     HSMIDIDeviceManager *wrapper = [skin toNSObjectAtIndex:1] ;
     MIKMIDISystemExclusiveCommand *identityRequest = [MIKMIDISystemExclusiveCommand identityRequestCommand];
@@ -1371,7 +1385,7 @@ static int midi_identityRequest(lua_State *L) {
 /// Returns:
 ///  * `true` if enabled otherwise `false`
 static int midi_synthesize(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBOOLEAN | LS_TOPTIONAL, LS_TBREAK];
 
     HSMIDIDeviceManager *wrapper = [skin toNSObjectAtIndex:1] ;
@@ -1399,7 +1413,7 @@ static int midi_synthesize(lua_State *L) {
 /// Returns:
 ///  * The name as a string.
 static int midi_name(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     HSMIDIDeviceManager *wrapper = [skin toNSObjectAtIndex:1] ;
     NSString *deviceName = [wrapper.midiDevice name];
@@ -1417,7 +1431,7 @@ static int midi_name(lua_State *L) {
 /// Returns:
 ///  * The name as a string.
 static int midi_displayName(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     HSMIDIDeviceManager *wrapper = [skin toNSObjectAtIndex:1] ;
     NSString *displayName = [wrapper.midiDevice displayName];
@@ -1435,7 +1449,7 @@ static int midi_displayName(lua_State *L) {
 /// Returns:
 ///  * The model name as a string.
 static int midi_model(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     HSMIDIDeviceManager *wrapper = [skin toNSObjectAtIndex:1] ;
     NSString *model = [wrapper.midiDevice model];
@@ -1453,7 +1467,7 @@ static int midi_model(lua_State *L) {
 /// Returns:
 ///  * The manufacturer name as a string.
 static int midi_manufacturer(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     HSMIDIDeviceManager *wrapper = [skin toNSObjectAtIndex:1] ;
     NSString *manufacturer = [wrapper.midiDevice manufacturer];
@@ -1471,7 +1485,7 @@ static int midi_manufacturer(lua_State *L) {
 /// Returns:
 ///  * `true` if online, otherwise `false`
 static int midi_isOnline(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     HSMIDIDeviceManager *wrapper = [skin toNSObjectAtIndex:1] ;
     lua_pushboolean(L, [wrapper.midiDevice isOnline]);
@@ -1488,7 +1502,7 @@ static int midi_isOnline(lua_State *L) {
 /// Returns:
 ///  * `true` if virtual, otherwise `false`
 static int midi_isVirtual(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     HSMIDIDeviceManager *wrapper = [skin toNSObjectAtIndex:1] ;
     lua_pushboolean(L, [wrapper.midiDevice isVirtual]);
@@ -1499,7 +1513,6 @@ static int midi_isVirtual(lua_State *L) {
 
 /// hs.midi.commandTypes[]
 /// Constant
-///
 /// A table containing the numeric value for the possible flags returned by the `commandType` parameter of the callback function.
 ///
 /// Defined keys are:
@@ -1554,35 +1567,35 @@ static int pushCommandTypes(lua_State *L) {
 // Setup MIDI Device:
 //
 static int pushHSMIDIDeviceManager(lua_State *L, id obj) {
-     HSMIDIDeviceManager *value = obj;
-     value.selfRefCount++ ;
-     void** valuePtr = lua_newuserdata(L, sizeof(HSMIDIDeviceManager *));
-     *valuePtr = (__bridge_retained void *)value;
-     luaL_getmetatable(L, USERDATA_TAG);
-     lua_setmetatable(L, -2);
-     return 1;
+    HSMIDIDeviceManager *value = obj;
+    value.selfRefCount++ ;
+    void** valuePtr = lua_newuserdata(L, sizeof(HSMIDIDeviceManager *));
+    *valuePtr = (__bridge_retained void *)value;
+    luaL_getmetatable(L, USERDATA_TAG);
+    lua_setmetatable(L, -2);
+    return 1;
 }
 
 id toHSMIDIDeviceManagerFromLua(lua_State *L, int idx) {
-     LuaSkin *skin = [LuaSkin shared] ;
-     HSMIDIDeviceManager *value ;
-     if (luaL_testudata(L, idx, USERDATA_TAG)) {
-         value = get_objectFromUserdata(__bridge HSMIDIDeviceManager, L, idx, USERDATA_TAG) ;
-     } else {
-         [skin logError:[NSString stringWithFormat:@"expected %s object, found %s", USERDATA_TAG,
-                                                    lua_typename(L, lua_type(L, idx))]] ;
-     }
-     return value ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
+    HSMIDIDeviceManager *value ;
+    if (luaL_testudata(L, idx, USERDATA_TAG)) {
+        value = get_objectFromUserdata(__bridge HSMIDIDeviceManager, L, idx, USERDATA_TAG) ;
+    } else {
+        [skin logError:[NSString stringWithFormat:@"expected %s object, found %s", USERDATA_TAG,
+                        lua_typename(L, lua_type(L, idx))]] ;
+    }
+    return value ;
 }
 
 #pragma mark - Hammerspoon/Lua Infrastructure
 
 static int userdata_tostring(lua_State* L) {
-     LuaSkin *skin = [LuaSkin shared] ;
-     HSMIDIDeviceManager *obj = [skin luaObjectAtIndex:1 toClass:"HSMIDIDeviceManager"] ;
-     NSString *title = obj.midiDevice.displayName ;
-     [skin pushNSObject:[NSString stringWithFormat:@"%s: %@ (%p)", USERDATA_TAG, title, lua_topointer(L, 1)]] ;
-     return 1 ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
+    HSMIDIDeviceManager *obj = [skin luaObjectAtIndex:1 toClass:"HSMIDIDeviceManager"] ;
+    NSString *title = obj.midiDevice.displayName ;
+    [skin pushNSObject:[NSString stringWithFormat:@"%s: %@ (%p)", USERDATA_TAG, title, lua_topointer(L, 1)]] ;
+    return 1 ;
 }
 
 static int userdata_eq(lua_State* L) {
@@ -1590,7 +1603,7 @@ static int userdata_eq(lua_State* L) {
     // Can't get here if at least one of us isn't a userdata type, and we only care if both types are ours, so use luaL_testudata before the macro causes a Lua error:
     //
     if (luaL_testudata(L, 1, USERDATA_TAG) && luaL_testudata(L, 2, USERDATA_TAG)) {
-        LuaSkin *skin = [LuaSkin shared] ;
+        LuaSkin *skin = [LuaSkin sharedWithState:L] ;
         HSMIDIDeviceManager *obj1 = [skin luaObjectAtIndex:1 toClass:"HSMIDIDeviceManager"] ;
         HSMIDIDeviceManager *obj2 = [skin luaObjectAtIndex:2 toClass:"HSMIDIDeviceManager"] ;
         lua_pushboolean(L, [obj1 isEqualTo:obj2]) ;
@@ -1608,7 +1621,7 @@ static int userdata_gc(lua_State* L) {
     if (obj) {
         obj.selfRefCount-- ;
         if (obj.selfRefCount == 0) {
-            LuaSkin *skin = [LuaSkin shared] ;
+            LuaSkin *skin = [LuaSkin sharedWithState:L] ;
             obj.callbackRef = [skin luaUnref:refTable ref:obj.callbackRef] ;
 
             //
@@ -1638,9 +1651,9 @@ static int userdata_gc(lua_State* L) {
 //
 // Metatable Garbage Collection:
 //
-static int meta_gc(lua_State* __unused L) {
+static int meta_gc(lua_State* L) {
     if (watcherDeviceManager) {
-        watcherDeviceManager.deviceCallbackRef = [[LuaSkin shared] luaUnref:refTable ref:watcherDeviceManager.deviceCallbackRef] ;
+        watcherDeviceManager.deviceCallbackRef = [[LuaSkin sharedWithState:L] luaUnref:refTable ref:watcherDeviceManager.deviceCallbackRef] ;
         [watcherDeviceManager unwatchDevices] ;
         watcherDeviceManager = nil ;
     }
@@ -1691,12 +1704,12 @@ static const luaL_Reg module_metaLib[] = {
 //
 // Initalise Module:
 //
-int luaopen_hs_midi_internal(lua_State* __unused L) {
+int luaopen_hs_midi_internal(lua_State* L) {
 
     //
     // Register Module:
     //
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     refTable = [skin registerLibraryWithObject:USERDATA_TAG
                                      functions:moduleLib
                                  metaFunctions:module_metaLib

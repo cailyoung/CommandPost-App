@@ -81,6 +81,9 @@ layout.maximized = geometry.rect(0, 0, 1, 1)
 ---  * windowTitleComparator - (optional) Function to use for window title comparison. It is called with two string arguments (below) and its return value is evaluated as a boolean. If no comparator is provided, the '==' operator is used
 ---   * windowTitle: The `:title()` of the window object being examined
 ---   * layoutWindowTitle: The window title string (second field) specified in each element of the layout table
+---   * Optionally a final element, the key "options" and a table value that can contain the following keys:
+---     * `absolute_x`: A boolean indicating that the x value in a frame rect above, is an absolute co-ordinate (ie useful for negative absolute co-ordinates)
+---     * `absolute_y`: A boolean indicating that the y value in a frame rect above, is an absolute co-ordinate (ie useful for negative absolute co-ordinates)
 ---
 --- Returns:
 ---  * None
@@ -107,7 +110,7 @@ layout.maximized = geometry.rect(0, 0, 1, 1)
 ---         {"iTunes", "MiniPlayer", "Color LCD", nil, nil, hs.geometry.rect(0, -48, 400, 48)},
 ---       }```
 ---  * An example of a function that works well as a `windowTitleComparator` is the Lua built-in `string.match`, which uses Lua Patterns to match strings
-function layout.apply(layout, windowTitleComparator)
+function layout.apply(theLayout, windowTitleComparator)
 -- Layout parameter should be a table where each row takes the form of:
 --  {"App name", "Window name","Display Name"/"hs.screen object", "unitrect", "framerect", "fullframerect"},
 --  First three items in each row are strings (although the display name can also be an hs.screen object, or nil)
@@ -126,7 +129,7 @@ function layout.apply(layout, windowTitleComparator)
             return windowTitle == layoutWindowTitle
         end
     end
-    for n,_row in pairs(layout) do
+    for _,_row in pairs(theLayout) do
         local app = nil
         local wins = nil
         local display = nil
@@ -134,7 +137,10 @@ function layout.apply(layout, windowTitleComparator)
         local unit = _row[4]
         local frame = _row[5]
         local fullframe = _row[6]
-        local windows = nil
+        local options = _row["options"]
+        if not options then
+            options = {}
+        end
 
         -- Find the application's object, if wanted
         if _row[1] then
@@ -200,7 +206,7 @@ function layout.apply(layout, windowTitleComparator)
             print(_row[1],_row[2])
             print("No windows matched, skipping.")
         else
-            for m,_win in pairs(wins) do
+            for _,_win in pairs(wins) do
                 local winframe = nil
                 local screenrect = nil
 
@@ -234,10 +240,10 @@ function layout.apply(layout, windowTitleComparator)
 
                 if winframe then
                     if winframe.x < 0 or winframe.y < 0 then
-                        if winframe.x < 0 then
+                        if winframe.x < 0 and not options["absolute_x"] then
                             winframe.x = screenrect.w + winframe.x
                         end
-                        if winframe.y < 0 then
+                        if winframe.y < 0 and not options["absolute_y"] then
                             winframe.y = screenrect.h + winframe.y
                         end
                     end

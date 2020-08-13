@@ -9,24 +9,12 @@
 #import "MJConfigUtils.h"
 #import "MJFileUtils.h"
 #import "MJAccessibilityUtils.h"
+#import "HSLogger.h"
 #import "variables.h"
 #import "secrets.h"
 #import "PFMoveApplication.h"
 
 @implementation MJAppDelegate
-
-/*
-static BOOL MJFirstRunForCurrentVersion(void) {
-    NSString* key = [NSString stringWithFormat:@"%@_%d", MJHasRunAlreadyKey, MJVersionFromThisApp()];
-
-    BOOL firstRun = ![[NSUserDefaults standardUserDefaults] boolForKey:key];
-
-    if (firstRun)
-        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:key];
-
-    return firstRun;
-}
-*/
 
 - (BOOL) applicationShouldHandleReopen:(NSApplication*)theApplication hasVisibleWindows:(BOOL)hasVisibleWindows {
     callDockIconCallback();
@@ -59,7 +47,7 @@ static BOOL MJFirstRunForCurrentVersion(void) {
 
 - (BOOL)application:(NSApplication *)theApplication openFile:(NSString *)fileAndPath {
     NSString *typeOfFile = [[NSWorkspace sharedWorkspace] typeOfFile:fileAndPath error:nil];
-    
+
     if ([typeOfFile isEqualToString:@"org.latenitefilms.commandpost.plugin"]) {
         // This is a Plugin, so we will attempt to copy it to the Plugin directory
         NSError *fileError;
@@ -68,8 +56,14 @@ static BOOL MJFirstRunForCurrentVersion(void) {
         NSString *spoonPath = [@"~/Library/Application Support/CommandPost/Plugins/" stringByExpandingTildeInPath];
         NSString *spoonName = [fileAndPath lastPathComponent];
         NSString *dstSpoonFullPath = [spoonPath stringByAppendingPathComponent:spoonName];
+
+        if ([dstSpoonFullPath isEqualToString:fileAndPath]) {
+            NSLog(@"User double clicked on a Spoon in %@, skipping", MJConfigDir());
+            return YES;
+        }
+
         NSFileManager *fileManager = [NSFileManager defaultManager];
-        
+
         // Remove any pre-existing copy of the Plugin
         if ([fileManager fileExistsAtPath:dstSpoonFullPath]) {
             NSLog(@"Plugin already exists at %@, removing the old version", dstSpoonFullPath);
@@ -81,12 +75,12 @@ static BOOL MJFirstRunForCurrentVersion(void) {
                 [alert addButtonWithTitle:@"OK"];
                 [alert setMessageText:@"Error upgrading Plugin"];
                 [alert setInformativeText:[NSString stringWithFormat:@"%@\n\nSource: %@\nDest: %@", fileError.localizedDescription, fileAndPath, spoonPath]];
-                [alert setAlertStyle:NSCriticalAlertStyle];
+                [alert setAlertStyle:NSAlertStyleCritical];
                 [alert runModal];
                 return YES;
             }
         }
-        
+
         success = [[NSFileManager defaultManager] moveItemAtPath:fileAndPath toPath:dstSpoonFullPath error:&fileError];
         if (!success) {
             NSLog(@"Unable to move %@ to %@: %@", fileAndPath, spoonPath, fileError);
@@ -94,7 +88,7 @@ static BOOL MJFirstRunForCurrentVersion(void) {
             [alert addButtonWithTitle:@"OK"];
             [alert setMessageText:@"Error installing Plugin"];
             [alert setInformativeText:[NSString stringWithFormat:@"%@\n\nSource: %@\nDest: %@", fileError.localizedDescription, fileAndPath, spoonPath]];
-            [alert setAlertStyle:NSCriticalAlertStyle];
+            [alert setAlertStyle:NSAlertStyleCritical];
             [alert runModal];
         } else {
             NSUserNotification *notification = [[NSUserNotification alloc] init];
@@ -106,12 +100,12 @@ static BOOL MJFirstRunForCurrentVersion(void) {
         }
         return YES; // Note that we always return YES here because otherwise macOS tells the user that we can't open Spoons, which is ludicrous
     }
-    
+
     NSString *fileExtension = [fileAndPath pathExtension];
     NSDictionary *infoDict = [[NSBundle mainBundle] infoDictionary];
     NSArray *supportedExtensions = [infoDict valueForKeyPath:@"CFBundleDocumentTypes.CFBundleTypeExtensions"];
     NSArray *flatSupportedExtensions = [supportedExtensions valueForKeyPath:@"@unionOfArrays.self"];
-    
+
     // Files to be processed by hs.urlevent
     if ([flatSupportedExtensions containsObject:fileExtension]) {
         if (!self.openFileDelegate) {
@@ -125,25 +119,27 @@ static BOOL MJFirstRunForCurrentVersion(void) {
         // Trigger File Dropped to Dock Icon Callback
         fileDroppedToDockIcon(fileAndPath);
     }
-    
+
     return YES;
 }
 
 
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
-    
+
+    BOOL isTesting = NO;
+
     // User is holding down Command (0x37) & Option (0x3A) keys:
     if (CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState,0x3A) && CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState,0x37)) {
-        
+
         NSAlert *alert = [[NSAlert alloc] init];
         [alert addButtonWithTitle:@"Continue"];
         [alert addButtonWithTitle:@"Delete Preferences"];
         [alert setMessageText:@"Do you want to delete the preferences?"];
         [alert setInformativeText:@"Deleting the preferences will reset all application settings to their defaults."];
-        [alert setAlertStyle:NSWarningAlertStyle];
-        
+        [alert setAlertStyle:NSAlertStyleWarning];
+
         if ([alert runModal] == NSAlertSecondButtonReturn) {
-            
+
             // Reset Preferences:
             NSDictionary * allObjects;
             allObjects = [[NSUserDefaults standardUserDefaults] dictionaryRepresentation];
@@ -152,10 +148,10 @@ static BOOL MJFirstRunForCurrentVersion(void) {
                 [[NSUserDefaults standardUserDefaults] removeObjectForKey: key];
             }
             [[NSUserDefaults standardUserDefaults] synchronize];
-            
+
         }
     }
-    
+
     [[NSDistributedNotificationCenter defaultCenter] addObserver:self selector:@selector(accessibilityChanged:) name:@"com.apple.accessibility.api" object:nil];
 
     // Remove our early event manager handler so hs.urlevent can register for it later, if the user has it configured to
@@ -164,6 +160,8 @@ static BOOL MJFirstRunForCurrentVersion(void) {
     if(NSClassFromString(@"XCTest") != nil) {
         // Hammerspoon Tests
         NSLog(@"in testing mode!");
+        isTesting = YES;
+
         NSBundle *mainBundle = [NSBundle mainBundle];
         NSBundle *bundle = [NSBundle bundleWithPath:[NSString stringWithFormat:@"%@/Contents/Plugins/Hammerspoon Tests.xctest", mainBundle.bundlePath]];
         NSString *lsUnitPath = [bundle pathForResource:@"lsunit" ofType:@"lua"];
@@ -222,12 +220,22 @@ static BOOL MJFirstRunForCurrentVersion(void) {
 
     [self registerDefaultDefaults];
 
-    // Enable Crashlytics, if we have an API key available
-#ifdef CRASHLYTICS_API_KEY
-    if (HSUploadCrashData()) {
-        Crashlytics *crashlytics = [Crashlytics sharedInstance];
-        crashlytics.debugMode = YES;
-        [Crashlytics startWithAPIKey:[NSString stringWithUTF8String:CRASHLYTICS_API_KEY] delegate:self];
+    // Enable Sentry, if we have an API URL available
+#ifdef SENTRY_API_URL
+    if (HSUploadCrashData() && !isTesting) {
+        SentryEvent* (^sentryWillUploadCrashReport) (SentryEvent *event) = ^SentryEvent* (SentryEvent *event) {
+            if ([event.extra objectForKey:@"MjolnirModuleLoaded"]) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                   [self showMjolnirMigrationNotification];
+                });
+            }
+            return event;
+        };
+
+        [SentrySDK startWithOptions:@{
+            @"dsn": @SENTRY_API_URL,
+            @"beforeSend": sentryWillUploadCrashReport,
+        }];
     }
 #endif
 
@@ -255,8 +263,7 @@ static BOOL MJFirstRunForCurrentVersion(void) {
     [[MJConsoleWindowController singleton] setup];
     MJLuaCreate();
 
-    // FIXME: Do we care about showing the prefs on the first run of each new version? (Ng does not care)
-    //if (MJFirstRunForCurrentVersion() || !MJAccessibilityIsEnabled())
+    //if (!MJAccessibilityIsEnabled())
         //[[MJPreferencesWindowController singleton] showWindow: nil];
 }
 
@@ -276,6 +283,7 @@ static BOOL MJFirstRunForCurrentVersion(void) {
 }
 
 - (void) accessibilityChanged:(NSNotification*)note {
+    HSNSLOG(@"accessibilityChanged: %@", MJAccessibilityIsEnabled() ? @"ENABLED" : @"DISABLED");
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         callAccessibilityStateCallback();
     });
@@ -293,8 +301,8 @@ static BOOL MJFirstRunForCurrentVersion(void) {
                          MJShowMenuIconKey: @NO,
                          HSAutoLoadExtensions: @YES,
                          HSUploadCrashDataKey: @YES,
-                         HSAppleScriptEnabledKey: @YES,
-                         HSOpenConsoleOnDockClickKey: @NO,
+                         HSAppleScriptEnabledKey: @NO,
+                         HSOpenConsoleOnDockClickKey: @YES,
                          HSPreferencesDarkModeKey: @YES,
                          HSConsoleDarkModeKey: @YES,
                          }];
@@ -319,7 +327,7 @@ static BOOL MJFirstRunForCurrentVersion(void) {
     @try {
         [[NSApplication sharedApplication] orderFrontStandardAboutPanel: nil];
     } @catch (NSException *exception) {
-        [[LuaSkin shared] logError:@"Unable to open About dialog. This may mean your CommandPost installation is corrupt. Please re-install it!"];
+        [[LuaSkin sharedWithState:NULL] logError:@"Unable to open About dialog. This may mean your CommandPost installation is corrupt. Please re-install it!"];
     }
 }
 
@@ -348,51 +356,20 @@ static BOOL MJFirstRunForCurrentVersion(void) {
     [alert addButtonWithTitle:@"OK"];
     [alert setMessageText:@"CommandPost crash detected"];
     [alert setInformativeText:@"Your init.lua is loading Mjolnir modules and a previous launch crashed.\n\nCommandPost ships with updated versions of many of the Mjolnir modules, with both new features and many bug fixes.\n\nPlease consult our API documentation and migrate your config."];
-    [alert setAlertStyle:NSCriticalAlertStyle];
+    [alert setAlertStyle:NSAlertStyleCritical];
     [alert runModal];
-}
-
-// Commented out by Chris Hocking:
-/*
-- (void)crashlyticsDidDetectReportForLastExecution:(CLSReport *)report completionHandler:(void (^)(BOOL submit))completionHandler {
-    BOOL showMjolnirMigrationDialog = NO;
-
-    if ([report.customKeys objectForKey:@"MjolnirModuleLoaded"]) {
-        showMjolnirMigrationDialog = YES;
-    }
-
-    completionHandler(YES);
-
-    if (showMjolnirMigrationDialog) {
-        [self showMjolnirMigrationNotification];
-    }
-}
-*/
-
-// Added by Chris Hocking:
-- (void)crashlyticsDidDetectReportForLastExecution:(CLSReport *)report completionHandler:(void (^)(BOOL))completionHandler {
-    // Use this opportunity to take synchronous action on a crash. See Crashlytics.h for
-    // details and implications.
-
-    // Maybe consult NSUserDefaults or show a UI prompt.
-
-    // But, make ABSOLUTELY SURE you invoke completionHandler, as the SDK
-    // will not submit the report until you do. You can do this from any
-    // thread, but that's optional. If you want, you can just call the
-    // completionHandler and return.
-    [[NSOperationQueue mainQueue] addOperationWithBlock:^{
-        completionHandler(YES);
-    }];
 }
 
 #pragma mark - Sparkle delegate methods
 - (void)updater:(id)updater didFindValidUpdate:(id)update {
-    NSLog(@"Update found: %@", [update valueForKey:@"versionString"]);
+    NSLog(@"Update found: %@ (Build: %@)", [update valueForKey:@"displayVersionString"], [update valueForKey:@"versionString"]);
     self.updateAvailable = [update valueForKey:@"versionString"];
+    self.updateAvailableDisplayVersion = [update valueForKey:@"displayVersionString"];
 }
 
 - (void)updaterDidNotFindUpdate:(id)update {
     self.updateAvailable = nil;
+    self.updateAvailableDisplayVersion = nil;
 }
 
 @end

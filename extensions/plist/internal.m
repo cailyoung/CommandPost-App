@@ -11,10 +11,41 @@
 /// Returns:
 ///  * The contents of the plist as a Lua table
 static int plist_read(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TSTRING, LS_TBREAK];
 
     NSDictionary *plist = [NSDictionary dictionaryWithContentsOfFile:[[skin toNSObjectAtIndex:1] stringByExpandingTildeInPath]];
+    [skin pushNSObject:plist];
+
+    return 1;
+}
+
+/// hs.plist.readString(value) -> table | nil
+/// Function
+/// Interpretes a property list file within a string into a table.
+///
+/// Parameters:
+///  * value - The contents of the property list as a string
+///
+/// Returns:
+///  * The contents of the property list as a Lua table or `nil` if an error occurs
+static int plist_readString(lua_State *L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
+    [skin checkArgs:LS_TSTRING, LS_TBREAK];
+
+    NSString *source = [skin toNSObjectAtIndex:1];
+
+    NSData *plistData = [source dataUsingEncoding:NSUTF8StringEncoding];
+    NSError *error;
+    NSPropertyListFormat format;
+    NSDictionary* plist = [NSPropertyListSerialization propertyListWithData:plistData options:NSPropertyListImmutable format:&format error:&error];
+
+    if (!plist) {
+        [skin logError:[NSString stringWithFormat:@"hs.plist.readString(): %@", error]];
+        lua_pushnil(L);
+        return 1;
+    }
+
     [skin pushNSObject:plist];
 
     return 1;
@@ -40,7 +71,7 @@ static int plist_read(lua_State *L) {
 ///   * Tables
 ///  * You should be careful when reading a plist, modifying and writing it - Hammerspoon may not be able to preserve all of the datatypes via Lua
 static int plist_write(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TSTRING, LS_TTABLE, LS_TBOOLEAN|LS_TOPTIONAL, LS_TBREAK];
 
     NSString *filePath = [[skin toNSObjectAtIndex:1] stringByExpandingTildeInPath];
@@ -83,12 +114,13 @@ static int plist_write(lua_State *L) {
 
 static const luaL_Reg plistlib[] = {
     {"read", plist_read},
+    {"readString", plist_readString},
     {"write", plist_write},
     {NULL, NULL}
 };
 
-int luaopen_hs_plist_internal(__unused lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared];
+int luaopen_hs_plist_internal(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
 
     [skin registerLibrary:plistlib metaFunctions:nil];
 

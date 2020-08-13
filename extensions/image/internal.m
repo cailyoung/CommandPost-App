@@ -9,6 +9,7 @@
 @import AVFoundation;
 
 #define USERDATA_TAG "hs.image"
+int refTable = LUA_NOREF;
 
 // NSWorkspace iconForFile: logs a warning every time you try to query when the path is nil.  Since
 // this happens a lot when trying to query based on a file bundle it means anything using spotlight
@@ -16,6 +17,8 @@
 // and be done with it. (and while there is a NSImageNameMultipleDocuments, I can't seem to find one
 // for a single document image...
 static NSImage *missingIconForFile ;
+
+static NSMutableSet *backgroundCallbacks ;
 
 #pragma mark - Module Constants
 
@@ -27,7 +30,7 @@ static NSImage *missingIconForFile ;
 ///  * Image names pulled from NSImage.h
 ///  * This table has a __tostring() metamethod which allows listing it's contents in the Hammerspoon console by typing `hs.image.systemImageNames`.
 static int pushNSImageNameTable(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     lua_newtable(L) ;
         [skin pushNSObject:NSImageNameQuickLookTemplate] ;                       lua_setfield(L, -2, "QuickLookTemplate") ;
         [skin pushNSObject:NSImageNameBluetoothTemplate] ;                       lua_setfield(L, -2, "BluetoothTemplate") ;
@@ -43,16 +46,8 @@ static int pushNSImageNameTable(lua_State *L) {
         [skin pushNSObject:NSImageNameInvalidDataFreestandingTemplate] ;         lua_setfield(L, -2, "InvalidDataFreestandingTemplate") ;
         [skin pushNSObject:NSImageNameLockLockedTemplate] ;                      lua_setfield(L, -2, "LockLockedTemplate") ;
         [skin pushNSObject:NSImageNameLockUnlockedTemplate] ;                    lua_setfield(L, -2, "LockUnlockedTemplate") ;
-// added in 10.12
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wpartial-availability"
-    if (&NSImageNameGoForwardTemplate != NULL) {
         [skin pushNSObject:NSImageNameGoForwardTemplate] ;                       lua_setfield(L, -2, "GoForwardTemplate") ;
-    }
-    if (&NSImageNameGoBackTemplate != NULL) {
         [skin pushNSObject:NSImageNameGoBackTemplate] ;                          lua_setfield(L, -2, "GoBackTemplate") ;
-    }
-#pragma clang diagnostic pop
         [skin pushNSObject:NSImageNameGoRightTemplate] ;                         lua_setfield(L, -2, "GoRightTemplate") ;
         [skin pushNSObject:NSImageNameGoLeftTemplate] ;                          lua_setfield(L, -2, "GoLeftTemplate") ;
         [skin pushNSObject:NSImageNameRightFacingTriangleTemplate] ;             lua_setfield(L, -2, "RightFacingTriangleTemplate") ;
@@ -819,7 +814,7 @@ static int additionalImages(lua_State *L) {
 /// Returns:
 ///  * An `hs.image` object, or nil if an error occured
 static int imageFromPath(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TSTRING, LS_TBREAK];
 
     NSString* imagePath = [skin toNSObjectAtIndex:1];
@@ -830,7 +825,7 @@ static int imageFromPath(lua_State *L) {
     if (newImage && newImage.valid) {
         [skin pushNSObject:newImage];
     } else {
-        return luaL_error(L, "Unable to load image: %s", [imagePath UTF8String]);
+        lua_pushnil(L);
     }
 
     return 1;
@@ -862,7 +857,7 @@ static int imageFromPath(lua_State *L) {
 ///  * To use the ASCII diagram image support, see https://github.com/cparnot/ASCIImage and http://cocoamine.net/blog/2015/03/20/replacing-photoshop-with-nsstring/
 ///  * The default for lineWidth, when antialiasing is off, is defined within the ASCIImage library. Geometrically it represents one half of the hypotenuse of the unit right-triangle and is a more accurate representation of a "real" point size when dealing with arbitrary angles and lines than 1.0 would be.
 static int imageWithContextFromASCII(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TSTRING, LS_TTABLE | LS_TNIL | LS_TOPTIONAL, LS_TBREAK];
     NSString *imageASCII = [skin toNSObjectAtIndex:1];
 
@@ -1007,31 +1002,62 @@ static int imageFromName(lua_State *L) {
     NSString *imageNSName = [NSString stringWithUTF8String:imageName] ;
     NSImage *newImage = imageNSName ? [NSImage imageNamed:imageNSName] : nil ;
     if (newImage) {
-        [[LuaSkin shared] pushNSObject:newImage] ;
+        [[LuaSkin sharedWithState:L] pushNSObject:newImage] ;
     } else {
         lua_pushnil(L) ;
     }
     return 1 ;
 }
 
-/// hs.image.imageFromURL(url) -> object
+/// hs.image.imageFromURL(url[, callbackFn]) -> object
 /// Constructor
 /// Creates an `hs.image` object from the contents of the specified URL.
 ///
 /// Parameters:
 ///  * url - a web url specifying the location of the image to retrieve
+///  * callbackFn - an optional callback function to be called when the image fetching is complete
 ///
 /// Returns:
-///  * An `hs.image` object or nil, if the url does not specify image contents or is unreachable
+///  * An `hs.image` object or nil, if the url does not specify image contents or is unreachable, or if a callback function is supplied
+///
+/// Notes:
+///  * If a callback function is supplied, this function will return nil immediately and the image will be fetched asynchronously
 static int imageFromURL(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
-    [skin checkArgs:LS_TSTRING, LS_TBREAK] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
+    [skin checkArgs:LS_TSTRING, LS_TFUNCTION|LS_TOPTIONAL, LS_TBREAK] ;
     NSURL *theURL = [NSURL URLWithString:[skin toNSObjectAtIndex:1]] ;
-    if (theURL) {
+    if (!theURL) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    if (lua_type(L, 2) != LUA_TFUNCTION) {
         [skin pushNSObject:[[NSImage alloc] initWithContentsOfURL:theURL]] ;
     } else {
-        lua_pushnil(L) ;
+        int fnRef = [skin luaRef:refTable atIndex:2];
+        [backgroundCallbacks addObject:@(fnRef)] ;
+
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^(void){
+            NSImage *image = [[NSImage alloc] initWithContentsOfURL:theURL];
+
+            dispatch_async(dispatch_get_main_queue(), ^(void){
+                if ([backgroundCallbacks containsObject:@(fnRef)]) {
+                    LuaSkin *bgSkin = [LuaSkin sharedWithState:NULL];
+                    _lua_stackguard_entry(bgSkin.L);
+
+                    [bgSkin pushLuaRef:refTable ref:fnRef];
+                    [bgSkin pushNSObject:image];
+                    [bgSkin protectedCallAndTraceback:1 nresults:0];
+                    [bgSkin luaUnref:refTable ref:fnRef];
+
+                    _lua_stackguard_exit(bgSkin.L);
+                    [backgroundCallbacks removeObject:@(fnRef)] ;
+                }
+            });
+        });
+        lua_pushnil(L);
     }
+
     return 1 ;
 }
 
@@ -1045,7 +1071,7 @@ static int imageFromURL(lua_State *L) {
 /// Returns:
 ///  * An `hs.image` object or nil, if no app icon was found
 static int imageFromApp(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TSTRING, LS_TBREAK];
     NSString *imagePath = [[NSWorkspace sharedWorkspace] absolutePathForAppBundleWithIdentifier:[skin toNSObjectAtIndex:1]];
     NSImage *iconImage = imagePath ? [[NSWorkspace sharedWorkspace] iconForFile:imagePath] : missingIconForFile ;
@@ -1068,7 +1094,7 @@ static int imageFromApp(lua_State *L) {
 /// Returns:
 ///  * An `hs.image` object or nil, if there was an error.  The image will be the icon for the specified file or an icon representing multiple files if an array of multiple files is specified.
 static int imageForFiles(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TTABLE | LS_TSTRING, LS_TBREAK] ;
     NSArray *theFiles ;
     if (lua_type(L, 1) == LUA_TSTRING) {
@@ -1103,7 +1129,7 @@ static int imageForFiles(lua_State *L) {
 /// Returns:
 ///  * An `hs.image` object or nil, if there was an error
 static int imageForFileType(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TSTRING, LS_TBREAK] ;
 
     NSImage *theImage = [[NSWorkspace sharedWorkspace] iconForFileType:[skin toNSObjectAtIndex:1]] ;
@@ -1139,7 +1165,7 @@ static int imageForFileType(lua_State *L) {
 ///  * If no common album art filenames are found, it attempts to extract image metadata from the file. This works for .mp3/.m4a files
 ///  * If embedded image metadata is found, it is returned as an `hs.image` object, otherwise the filetype icon
 static int imageFromMediaFile(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TSTRING, LS_TBREAK] ;
     NSString *theFilePath = [skin toNSObjectAtIndex:1] ;
     theFilePath = [theFilePath stringByExpandingTildeInPath];
@@ -1222,9 +1248,9 @@ static int imageFromMediaFile(lua_State *L) {
 /// Notes:
 ///  * see also [hs.image:setName](#setName) for a variant that returns a boolean instead.
 static int getImageName(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TANY | LS_TOPTIONAL, LS_TBREAK] ;
-    NSImage *testImage = [[LuaSkin shared] luaObjectAtIndex:1 toClass:"NSImage"] ;
+    NSImage *testImage = [skin luaObjectAtIndex:1 toClass:"NSImage"] ;
     if (lua_gettop(L) == 1) {
         lua_pushstring(L, [[testImage name] UTF8String]) ;
     } else {
@@ -1251,7 +1277,7 @@ static int getImageName(lua_State* L) {
 /// Notes:
 ///  * See also [hs.image:setSize](#setSize) for creating a copy of the image at a new size.
 static int getImageSize(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK | LS_TVARARG] ;
     NSImage *theImage = [skin luaObjectAtIndex:1 toClass:"NSImage"] ;
     if (lua_gettop(L) == 1) {
@@ -1272,6 +1298,34 @@ static int getImageSize(lua_State* L) {
     return 1 ;
 }
 
+/// hs.image:colorAt(point) -> table
+/// Method
+/// Reads the color of the pixel at the specified location.
+///
+/// Parameters:
+///  * `point` - a `hs.geometry.point`
+///
+/// Returns:
+///  * A `hs.drawing.color` object
+static int colorAt(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
+    [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TTABLE, LS_TBREAK] ;
+
+    // Source: https://stackoverflow.com/a/33485218/6925202
+    @autoreleasepool {
+    	NSImage *theImage = [skin luaObjectAtIndex:1 toClass:"NSImage"] ;
+    	NSPoint point  = [skin tableToPointAtIndex:2] ;
+
+		// Source: https://stackoverflow.com/a/48400410
+		[theImage lockFocus];
+		NSColor *pixelColor = NSReadPixel(point);
+		[theImage unlockFocus];
+        [skin pushNSObject:pixelColor];
+	}
+
+    return 1;
+}
+
 /// hs.image:croppedCopy(rectangle) -> object
 /// Method
 /// Returns a copy of the portion of the image specified by the rectangle specified.
@@ -1281,8 +1335,8 @@ static int getImageSize(lua_State* L) {
 ///
 /// Returns:
 ///  * a copy of the portion of the image specified
-static int croppedCopy(__unused lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+static int croppedCopy(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TTABLE, LS_TBREAK] ;
     NSImage *theImage = [skin luaObjectAtIndex:1 toClass:"NSImage"] ;
     NSRect  frame  = [skin tableToRectAtIndex:2] ;
@@ -1292,7 +1346,7 @@ static int croppedCopy(__unused lua_State* L) {
     NSRect targetRect = NSMakeRect(0.0, 0.0, theImage.size.width, theImage.size.height);
     NSImage *newImage = [[NSImage alloc] initWithSize:targetRect.size];
     [newImage lockFocus];
-    [theImage drawInRect:targetRect fromRect:targetRect operation:NSCompositeCopy fraction:1.0];
+    [theImage drawInRect:targetRect fromRect:targetRect operation:NSCompositingOperationCopy fraction:1.0];
     [newImage unlockFocus];
 
 // http://stackoverflow.com/questions/35643020/nsimage-drawinrect-and-nsview-cachedisplayinrect-memory-retained
@@ -1341,7 +1395,7 @@ static int croppedCopy(__unused lua_State* L) {
 /// Notes:
 ///  * You can convert the string back into an image object with [hs.image.imageFromURL](#URL), e.g. `hs.image.imageFromURL(string)`
 static int encodeAsString(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK | LS_TVARARG] ;
     NSImage*  theImage = [skin luaObjectAtIndex:1 toClass:"NSImage"] ;
 
@@ -1374,7 +1428,7 @@ static int encodeAsString(lua_State* L) {
     NSRect targetRect = NSMakeRect(0.0, 0.0, theImage.size.width, theImage.size.height);
     NSImage *newImage = [[NSImage alloc] initWithSize:targetRect.size];
     [newImage lockFocus];
-    [theImage drawInRect:targetRect fromRect:targetRect operation:NSCompositeCopy fraction:1.0];
+    [theImage drawInRect:targetRect fromRect:targetRect operation:NSCompositingOperationCopy fraction:1.0];
     [newImage unlockFocus];
 
     NSBitmapImageRep *rep ;
@@ -1394,7 +1448,7 @@ static int encodeAsString(lua_State* L) {
 
         [NSGraphicsContext saveGraphicsState];
         [NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:rep]];
-        [newImage drawInRect:targetRect fromRect:NSZeroRect operation:NSCompositeCopy fraction:1.0];
+        [newImage drawInRect:targetRect fromRect:NSZeroRect operation:NSCompositingOperationCopy fraction:1.0];
         [NSGraphicsContext restoreGraphicsState];
     } else {
         NSData *tiffRep = [newImage TIFFRepresentation];
@@ -1432,7 +1486,7 @@ static int encodeAsString(lua_State* L) {
 /// Notes:
 ///  * Saves image at the size in points (or pixels, if `scale` is true) as reported by [hs.image:size()](#size) for the image object
 static int saveToFile(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING, LS_TBREAK | LS_TVARARG] ;
 
     NSImage*  theImage = [skin luaObjectAtIndex:1 toClass:"NSImage"] ;
@@ -1469,7 +1523,7 @@ static int saveToFile(lua_State* L) {
     NSRect targetRect = NSMakeRect(0.0, 0.0, theImage.size.width, theImage.size.height);
     NSImage *newImage = [[NSImage alloc] initWithSize:targetRect.size];
     [newImage lockFocus];
-    [theImage drawInRect:targetRect fromRect:targetRect operation:NSCompositeCopy fraction:1.0];
+    [theImage drawInRect:targetRect fromRect:targetRect operation:NSCompositingOperationCopy fraction:1.0];
     [newImage unlockFocus];
 
     NSBitmapImageRep *rep ;
@@ -1489,7 +1543,7 @@ static int saveToFile(lua_State* L) {
 
         [NSGraphicsContext saveGraphicsState];
         [NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:rep]];
-        [newImage drawInRect:targetRect fromRect:NSZeroRect operation:NSCompositeCopy fraction:1.0];
+        [newImage drawInRect:targetRect fromRect:NSZeroRect operation:NSCompositingOperationCopy fraction:1.0];
         [NSGraphicsContext restoreGraphicsState];
     } else {
         NSData *tiffRep = [newImage TIFFRepresentation];
@@ -1526,7 +1580,7 @@ static int saveToFile(lua_State* L) {
 ///  * Template images consist of black and clear colors (and an alpha channel). Template images are not intended to be used as standalone images and are usually mixed with other content to create the desired final appearance.
 ///  * Images with this flag set to true usually appear lighter than they would with this flag set to false.
 static int imageTemplate(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBOOLEAN | LS_TOPTIONAL, LS_TBREAK] ;
     NSImage *theImage = [skin luaObjectAtIndex:1 toClass:"NSImage"] ;
     if (lua_gettop(L) == 1) {
@@ -1547,17 +1601,134 @@ static int imageTemplate(lua_State *L) {
 ///
 /// Returns:
 ///  * a new hs.image object
-static int copyImage(__unused lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+static int copyImage(lua_State *L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK] ;
     NSImage *theImage = [skin luaObjectAtIndex:1 toClass:"NSImage"] ;
     [skin pushNSObject:[theImage copy]] ;
     return 1 ;
 }
 
+/// hs.image:getLoupedeckArray() -> table
+/// Method
+/// Translates an `hs.image` object into an RGB array string suitable for the Loupedeck CT device.
+///
+/// Parameters:
+///  * None
+///
+/// Returns:
+///  * A string containing the RGB data
+static int getLoupedeckArray(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
+    [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK] ;
+
+    NSImage *image = [skin luaObjectAtIndex:1 toClass:"NSImage"] ;
+    
+    NSRect imageRect = NSMakeRect(0, 0, image.size.width, image.size.height);
+
+    CGImageRef inImage = [image CGImageForProposedRect:&imageRect context:NULL hints:nil];
+
+    // Get image width, height. We'll use the entire image.
+    size_t pixelsWide = CGImageGetWidth(inImage);
+    size_t pixelsHigh = CGImageGetHeight(inImage);
+
+    // Declare the number of bytes per row. Each pixel in the bitmap in this
+    // example is represented by 4 bytes; 8 bits each of red, green, blue, and
+    // alpha.
+    unsigned long bitmapBytesPerRow   = (pixelsWide * 4);
+    unsigned long bitmapByteCount     = (bitmapBytesPerRow * pixelsHigh);
+
+    // Use the generic RGB color space.
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+
+    if (colorSpace == NULL)
+    {
+        return luaL_error(L, "error allocating color space") ;
+    }
+
+    // Allocate memory for image data. This is the destination in memory
+    // where any drawing to the bitmap context will be rendered.
+    void *bitmapData = malloc( bitmapByteCount );
+    if (bitmapData == NULL)
+    {
+        CGColorSpaceRelease( colorSpace );
+        return luaL_error(L, "memory not allocated") ;
+    }
+
+    // Create the bitmap context. We want pre-multiplied ARGB, 8-bits
+    // per component. Regardless of what the source image format is
+    // (CMYK, Grayscale, and so on) it will be converted over to the format
+    // specified here by CGBitmapContextCreate.
+    CGContextRef context = CGBitmapContextCreate (bitmapData,
+                                    pixelsWide,
+                                    pixelsHigh,
+                                    8,      // bits per component
+                                    bitmapBytesPerRow,
+                                    colorSpace,
+                                    kCGImageAlphaPremultipliedFirst);
+    
+    // Make sure and release colorspace before returning
+    CGColorSpaceRelease( colorSpace );
+    
+    if (context == NULL)
+    {
+        free (bitmapData);
+        return luaL_error(L, "context not created") ;
+    }
+    
+    size_t w = CGImageGetWidth(inImage);
+    size_t h = CGImageGetHeight(inImage);
+    CGRect rect = {{0,0},{w,h}};
+
+    // Draw the image to the bitmap context. Once we draw, the memory
+    // allocated for the context for rendering will then contain the
+    // raw image data in the specified color space.
+    CGContextDrawImage(context, rect, inImage);
+
+    // Setup the output array which we'll eventually send to Lua-land:
+    NSMutableData *output = [NSMutableData dataWithCapacity: w * h * 2];
+    
+    // Now we can get a pointer to the image data associated with the bitmap
+    // context.
+    unsigned char* data = CGBitmapContextGetData (context);
+    if (data != NULL) {
+        for (unsigned y = 0; y < h; y++)
+        {
+            for (unsigned x = 0; x < w; x++)
+            {
+                //offset locates the pixel in the data from x,y.
+                //4 for 4 bytes of data per pixel, w is width of one row of data.
+                int offset = 4*((w*round(y))+round(x));
+                //int alpha =  data[offset];
+                int red = data[offset+1];
+                int green = data[offset+2];
+                int blue = data[offset+3];
+                
+                uint16_t color = ((red >> 3) & 0x1f) << 11 | (((green >> 2) & 0x3F) << 5) | ((blue >> 3) & 0x1F);
+                            
+                uint8_t little = color & 0xFF;
+                uint8_t big = (color >> 8 ) & 0xFF;
+                [output appendBytes:&little length:1];
+                [output appendBytes:&big length:1];
+            }
+        }
+    }
+    
+    // Free image data memory for the context
+    if (data) {
+            free(data);
+    }
+    if (context) {
+        CGContextRelease(context);
+    }
+    
+    [skin pushNSObject:output withOptions:LS_NSLuaStringAsDataOnly];
+    return 1;
+}
+
 #pragma mark - Conversion Extensions
 
-// [[LuaSkin shared] pushNSObject:NSImage]
+// [skin pushNSObject:NSImage]
 // C-API
 // Pushes the provided NSImage onto the Lua Stack as a hs.image userdata object
 static int NSImage_tolua(lua_State *L, id obj) {
@@ -1582,7 +1753,7 @@ static id HSImage_toNSImage(lua_State *L, int idx) {
 #pragma mark - Hammerspoon/Lua Infrastructure
 
 static int userdata_tostring(lua_State* L) {
-    NSImage *testImage = [[LuaSkin shared] luaObjectAtIndex:1 toClass:"NSImage"] ;
+    NSImage *testImage = [[LuaSkin sharedWithState:L] luaObjectAtIndex:1 toClass:"NSImage"] ;
     NSString* theName = [testImage name] ;
 
     if (!theName) theName = @"" ; // unlike some cases, [NSImage name] apparently returns an actual NULL instead of an empty string...
@@ -1591,8 +1762,8 @@ static int userdata_tostring(lua_State* L) {
     return 1 ;
 }
 
-static int userdata_eq(__unused lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+static int userdata_eq(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     NSImage *image1 = [skin luaObjectAtIndex:1 toClass:"NSImage"] ;
     NSImage *image2 = [skin luaObjectAtIndex:2 toClass:"NSImage"] ;
 
@@ -1609,11 +1780,14 @@ static int userdata_gc(lua_State* L) {
     return 0 ;
 }
 
-// static int meta_gc(lua_State* __unused L) {
-//     [hsimageReferences removeAllIndexes];
-//     hsimageReferences = nil;
-//     return 0 ;
-// }
+static int meta_gc(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
+    [backgroundCallbacks enumerateObjectsUsingBlock:^(NSNumber *ref, __unused BOOL *stop) {
+        [skin luaUnref:refTable ref:ref.intValue] ;
+    }] ;
+    [backgroundCallbacks removeAllObjects] ;
+    return 0;
+}
 
 // Metatable for userdata objects
 static const luaL_Reg userdata_metaLib[] = {
@@ -1624,6 +1798,8 @@ static const luaL_Reg userdata_metaLib[] = {
     {"croppedCopy",       croppedCopy},
     {"saveToFile",        saveToFile},
     {"encodeAsURLString", encodeAsString},
+    {"colorAt",			  colorAt},
+    {"getLoupedeckArray", getLoupedeckArray},
 
     {"__tostring",        userdata_tostring},
     {"__eq",              userdata_eq},
@@ -1646,18 +1822,18 @@ static luaL_Reg moduleLib[] = {
     {NULL,                        NULL}
 };
 
-// // Metatable for module, if needed
-// static const luaL_Reg module_metaLib[] = {
-//     {"__gc",                meta_gc},
-//     {NULL,                  NULL}
-// };
+// Metatable for module, if needed
+static const luaL_Reg module_metaLib[] = {
+    {"__gc", meta_gc},
+    {NULL,   NULL}
+};
 
 int luaopen_hs_image_internal(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
-    [skin registerLibraryWithObject:USERDATA_TAG
-                          functions:moduleLib
-                      metaFunctions:nil
-                    objectFunctions:userdata_metaLib];
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
+    refTable = [skin registerLibraryWithObject:USERDATA_TAG
+                                     functions:moduleLib
+                                 metaFunctions:module_metaLib
+                               objectFunctions:userdata_metaLib];
 
     pushNSImageNameTable(L); lua_setfield(L, -2, "systemImageNames") ;
     additionalImages(L) ;    lua_setfield(L, -2, "additionalImageNames") ;
@@ -1666,6 +1842,8 @@ int luaopen_hs_image_internal(lua_State* L) {
     [skin registerLuaObjectHelper:HSImage_toNSImage forClass:"NSImage" withUserdataMapping:USERDATA_TAG] ;
 
     if (!missingIconForFile) missingIconForFile = [[NSWorkspace sharedWorkspace] iconForFile:@""] ; // see comment at top
+
+    backgroundCallbacks = [NSMutableSet set] ;
     return 1;
 }
 

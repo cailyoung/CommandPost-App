@@ -7,19 +7,21 @@
 //
 
 #import <LuaSkin/LuaSkin.h>
-#import <Crashlytics/Crashlytics.h>
 
-#ifdef CRASHLYTICS_API_KEY
-#   ifdef CLS_LOG
-#       define HSNSLOG(__FORMAT__, ...) CLSNSLog(__FORMAT__, ##__VA_ARGS__)
-#   endif
-#endif
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wvariadic-macros"
+#import "Sentry.h"
+#pragma clang diagnostic pop
 
-#ifndef HSNSLOG
+#import "secrets.h"
+
+#ifdef SENTRY_API_URL
+#   pragma message "BUILD NOTE: Sentry API URL available"
+#   define HSNSLOG(__FORMAT__, ...) [LuaSkin logBreadcrumb:[NSString stringWithFormat:__FORMAT__, ##__VA_ARGS__]];
+#else
+#   pragma message "BUILD NOTE: Sentry API URL unavailable"
 #   define HSNSLOG(__FORMAT__, ...) NSLog(__FORMAT__, ##__VA_ARGS__)
 #endif
-
-#define HSLOG HSNSLOG
 
 @interface HSLogger : NSObject <LuaSkinDelegate> {
     lua_State *_L;
@@ -30,4 +32,5 @@
 - (instancetype)initWithLua:(lua_State *)L;
 - (void)setLuaState:(lua_State *)L;
 - (void) logForLuaSkinAtLevel:(int)level withMessage:(NSString *)theMessage;
+- (void)logBreadcrumb:(NSString *)format, ...;
 @end

@@ -30,14 +30,14 @@ mt_object = {
             local objectPath = mt_object.__objects[self]
             if mt_object.__watchers[objectPath] then
                 if mt_object.__watchers[objectPath][index] then
-                    for k, v in pairs(mt_object.__watchers[objectPath][index]) do
+                    for _, v in pairs(mt_object.__watchers[objectPath][index]) do
                         if v._active and v._callback then
                             v._callback(v, objectPath, index, oldValue, value)
                         end
                     end
                 end
                 if mt_object.__watchers[objectPath]["*"] then
-                    for k, v in pairs(mt_object.__watchers[objectPath]["*"]) do
+                    for _, v in pairs(mt_object.__watchers[objectPath]["*"]) do
                         if v._active and v._callback then
                             v._callback(v, objectPath, index, oldValue, value)
                         end
@@ -45,13 +45,6 @@ mt_object = {
                 end
             end
         end
-    end,
-    __pairs = function(self)
-        return function(_, k)
-            local v
-            k, v = next(mt_object.__values[self], k)
-            return k, v
-        end, self, nil
     end,
     __len = function(self)
         return #mt_object.__values[self]
@@ -96,8 +89,10 @@ mt_watcher = {
 ---  * nil
         release = function(self)
             self._active = false
-            for k,v in pairs(mt_object.__watchers[self._objPath][self._objKey]) do
-                if v == self then mt_object.__watchers[self._objPath][self._objKey] = nil end
+            if mt_object.__watchers[self._objPath][self._objKey] then -- may have already been removed by gc
+                for _,v in pairs(mt_object.__watchers[self._objPath][self._objKey]) do
+                    if v == self then mt_object.__watchers[self._objPath][self._objKey] = nil end
+                end
             end
             setmetatable(self, nil)
             return nil
@@ -229,7 +224,7 @@ end
 --- Parameters:
 ---  * `path`     - a string specifying the path to watch.  If `key` is not provided, then this should be a string of the form "path.key" where the key will be identified as the string after the last "."
 ---  * `key`      - if provided, a string specifying the specific key within the path to watch.
----  * `callback` - a function which will be invoked when changes occur to the key specified within the path.  The function should expect the following arguments:
+---  * `callback` - an optional function which will be invoked when changes occur to the key specified within the path.  The function should expect the following arguments:
 ---    * `watcher` - the watcher object itself
 ---    * `path`    - the path being watched
 ---    * `key`     - the specific key within the path which invoked this callback
@@ -248,14 +243,14 @@ end
 ---  * It is possible to register a watcher for a path that has not been registered with [hs.watchable.new](#new) yet. Retrieving the current value with [hs.watchable:value](#value) in such a case will return nil.
 module.watch = function(path, key, callback)
     if type(path) ~= "string" then error ("path must be a string", 2) end
-    if type(key) == "function" then
+    if type(key) == "function" or type(key) == "nil" then
         callback = key
         local objPath, objKey = path:match("^(.+)%.([^%.]+)$")
         if not (objPath and objKey) then error ("malformed path; must be of the form 'path.key' or path and key must be separate arguments", 2) end
         path = objPath
         key = objKey
     end
-    if type(callback) ~= "function" then error ("callback must be a function", 2) end
+    if type(callback) ~= "function" and type(callback) ~= "nil" then error ("callback must be a function or nil", 2) end
 
     local objPath, objKey = path, key
 
@@ -278,7 +273,7 @@ end
 
 -- for debugging, may remove in the future
 setmetatable(module, {
-    __index = function(self, key)
+    __index = function(_, key)
         return ({
             mt_object  = mt_object,
             mt_watcher = mt_watcher,

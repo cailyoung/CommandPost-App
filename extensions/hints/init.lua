@@ -3,7 +3,6 @@
 --- Switch focus with a transient per-application keyboard shortcut
 
 local hints = require "hs.hints.internal"
-local screen = require "hs.screen"
 local window = require "hs.window"
 local hotkey = require "hs.hotkey"
 local modal_hotkey = hotkey.modal
@@ -45,6 +44,11 @@ hints.showTitleThresh = 4
 --- If the title is longer than maxSize, the string is truncated, -1 to disable, valid value is >= 6
 hints.titleMaxSize = -1
 
+--- hs.hints.iconAlpha
+--- Variable
+--- Opacity of the application icon. Default is 0.95.
+hints.iconAlpha = 0.95
+
 local openHints = {}
 local takenPositions = {}
 local hintDict = {}
@@ -69,7 +73,7 @@ local function isValidWindow(win, allowNonStandard)
 end
 
 function hints.bumpPos(x,y)
-  for i, pos in ipairs(takenPositions) do
+  for _, pos in ipairs(takenPositions) do
     if ((pos.x-x)^2 + (pos.y-y)^2) < bumpThresh then
       return hints.bumpPos(x,y+bumpMove)
     end
@@ -144,7 +148,7 @@ function hints.displayHintsForDict(dict, prefixstring, showTitles, allowNonStand
             suffixString = ": "..win_title
           end
           -- print(win:title().." x:"..c.x.." y:"..c.y) -- debugging
-          local hint = hints.new(c.x, c.y, prefixstring .. key .. suffixString, app:bundleID(), win:screen(), hints.fontName, hints.fontSize)
+          local hint = hints.new(c.x, c.y, prefixstring .. key .. suffixString, app:bundleID(), win:screen(), hints.fontName, hints.fontSize, hints.iconAlpha)
           table.insert(takenPositions, c)
           table.insert(openHints, hint)
         end
@@ -185,7 +189,7 @@ function hints.processChar(char)
 end
 
 function hints.setupModal()
-  k = modal_hotkey.new(nil, nil)
+  local k = modal_hotkey.new(nil, nil)
   k:bind({}, 'escape', function() hints.closeHints(); k:exit() end)
 
   for _, c in ipairs(hintChars) do
@@ -227,7 +231,7 @@ function hints.windowHints(windows, callback, allowNonStandard)
   end
   hints.closeHints()
   hintDict = {}
-  for i, win in ipairs(windows) do
+  for _, win in ipairs(windows) do
     local app = win:application()
     if app and app:bundleID() and isValidWindow(win, allowNonStandard) then
       if hints.style == "vimperator" then

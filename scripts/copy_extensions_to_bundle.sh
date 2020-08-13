@@ -5,8 +5,10 @@ export HS_RESOURCES="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
 export HS_DST="${HS_RESOURCES}/extensions/hs"
 export HS_MODULES="application \
     audiodevice \
+    audiounit \
     base64 \
     battery \
+    bonjour \
     brightness \
     caffeinate \
     canvas \
@@ -15,8 +17,8 @@ export HS_MODULES="application \
     crash \
     dialog \
     distributednotifications \
+    doc \
     dockicon \
-    drawing \
     eventtap \
     fs \
     hash \
@@ -31,6 +33,7 @@ export HS_MODULES="application \
     json \
     keycodes \
     location \
+    math \
     menubar \
     midi \
     milight \
@@ -55,6 +58,7 @@ export HS_MODULES="application \
     uielement \
     urlevent \
     usb \
+    websocket \
     webview \
     wifi \
     window"
@@ -62,8 +66,10 @@ export HS_WATCHERS="application \
     audiodevice \
     battery \
     caffeinate \
+    pasteboard \
     screen \
     spaces \
+    uielement \
     usb \
     wifi"
 export HS_LUAONLY="_coresetup \
@@ -71,6 +77,7 @@ export HS_LUAONLY="_coresetup \
     appfinder \
     applescript \
     deezer \
+    drawing \
     expose \
     fnutils \
     geometry \
@@ -91,8 +98,7 @@ export HS_LUAONLY="_coresetup \
     tangent \
     utf8 \
     vox \
-    watchable \
-    doc"
+    watchable"
 
 # First, copy all of our init.lua's into the destination bundle
 for hs_lua in ${HS_LUAONLY} ${HS_MODULES} ; do
@@ -116,7 +122,6 @@ done
 cp -av "${SRCROOT}/extensions/doc/lua.json" "${HS_DST}/doc/lua.json"
 cp -av "${BUILT_PRODUCTS_DIR}/libdoc.dylib" "${HS_DST}/doc/markdown.so"
 cp -av "${SRCROOT}/extensions/doc/builder.lua" "${HS_DST}/doc"
-cp -av "${SRCROOT}/extensions/doc/spoonsupport.lua" "${HS_DST}/doc"
 cp -av "${SRCROOT}/extensions/doc/hsdocs" "${HS_DST}/doc"
 cp -av "${SRCROOT}/scripts/docs/templates/docs.css" "${HS_DST}/doc/hsdocs"
 
@@ -188,6 +193,9 @@ cp -av "${BUILT_PRODUCTS_DIR}/libwebviewtoolbar.dylib" "${HS_DST}/webview/toolba
 
 # Special copier for hs.webview.datastore submodule
 cp -av "${BUILT_PRODUCTS_DIR}/libwebviewdatastore.dylib" "${HS_DST}/webview/datastore.so"
+
+# Special copier for hs.bonjour.service submodule
+cp -av "${BUILT_PRODUCTS_DIR}/libbonjourservice.dylib" "${HS_DST}/bonjour/service.so"
 
 # Special copier for hs.fs submodule
 cp -av "${BUILT_PRODUCTS_DIR}/libfsvolume.dylib" "${HS_DST}/fs/volume.so"

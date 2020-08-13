@@ -4,9 +4,7 @@
 //
 //  Created by Michael Bujol on 02/12/2016.
 
-#import "HSTestcase.h"
-
-#define RUN_TWO_PART_LUA_TEST_WITH_TIMEOUT(timeout) XCTAssertTrue([self twoPartTestName:_cmd withTimeout:timeout], @"Test failed: %@", NSStringFromSelector(_cmd));
+#import "HSTestCase.h"
 
 @interface HSsocket : HSTestCase
 
@@ -22,11 +20,6 @@
 - (void)tearDown {
     // Put teardown code here. This method is called after the invocation of each test method in the class.
     [super tearDown];
-}
-
-- (BOOL)twoPartTestName:(SEL)selector withTimeout:(NSTimeInterval)timeout {
-    NSString *funcName = NSStringFromSelector(selector);
-    return [self luaTestWithCheckAndTimeOut:timeout setupCode:[funcName stringByAppendingString:@"()"] checkCode:[funcName stringByAppendingString:@"Values()"]];
 }
 
 // TCP socket tests

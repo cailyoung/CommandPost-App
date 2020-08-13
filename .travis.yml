@@ -1,5 +1,5 @@
 language: objective-c
-osx_image: xcode9.2
+osx_image: xcode11.5
 before_install:
   - gem install xcpretty
   - gem install xcpretty-travis-profiler-formatter
@@ -16,14 +16,13 @@ after_success:
 after_failure:
   - tail -500 $HOME/build.log
   - tail -500 $HOME/test.log
+  - grep "^Test Case.*).$" $HOME/test.log  | grep -v "' passed ("
 notifications:
   irc:
     channels:
-      - "irc.freenode.net#hammerspoon"
+      - secure: "SpW6b7TF42r7kMiPFqnyX+gNdQSNAN/S38cezjwuu0bolIRE2it97TU8xJ0uhmLPyGI/YjUBM5OJNG5xcqXJhrBPCfN8TBqwyvWJ6/rfoDGT0WDHs69mLoIvCuUAXSxYWYQf560El6VX9oclkSReiZEGYdUMcUzwupCpMmcjUi4="
     template:
       - "%{author} @ %{repository} / %{branch} - Build:#%{build_number} : %{message} - Changes: %{compare_url} - Build details: %{build_url}"
-    use_notice: true
-    skip_join: true
 addons:
   artifacts:
     s3_region: "eu-west-1"
@@ -35,5 +34,4 @@ addons:
     paths:
       - $HOME/build.log
       - $HOME/test.log
-      - $HOME/codecov.log
     target_paths: logs/$TRAVIS_BUILD_NUMBER

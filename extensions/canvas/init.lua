@@ -11,8 +11,6 @@
 --- Attributes for canvas elements are defined in [hs.canvas.attributes](#attributes). All canvas elements require the `type` field; all other attributes have default values.  Fields required to properly define the element (for example, `frame` for the `rectangle` element type) will be copied into the element definition with their default values if they are not specified at the time of creation. Optional attributes will only be assigned in the element definition if they are specified.  When the module requires the value for an element's attribute it first checks the element definition itself, then the defaults are looked for in the canvas defaults, and then finally in the module's built in defaults (specified in the descriptions below).
 ---
 --- Some examples of how to use this module can be found at https://github.com/asmagill/hammerspoon/wiki/hs.canvas.examples
----
---- If you wish to test out the `hs.drawing` wrapper which may eventually replace the original `hs.drawing` module entirely, check out [hs.canvas.drawingWrapper](#drawingWrapper).
 
 --- hs.canvas.attributes
 --- Field
@@ -186,7 +184,7 @@ canvasMT.behavior = function(self, ...) -- add nice wrapper version
             end
         elseif type(arg[1]) == "table" then
             theBehavior = 0
-            for i,v in ipairs(arg[1]) do
+            for _,v in ipairs(arg[1]) do
                 if module.windowBehaviors[v] then
                     theBehavior = theBehavior | ((type(v) == "string") and module.windowBehaviors[v] or v)
                 else
@@ -233,7 +231,7 @@ canvasMT.behaviorAsLabels = function(self, ...)
         end})
     elseif args.n == 1 and type(args[1]) == "table" then
         local newBehavior = 0
-        for i,v in ipairs(args[1]) do
+        for _,v in ipairs(args[1]) do
             local flag = tonumber(v) or module.windowBehaviors[v]
             if flag then newBehavior = newBehavior | flag end
         end
@@ -295,6 +293,9 @@ end
 ---
 --- Returns:
 ---  * The canvas object
+---
+--- Notes:
+---  * As of macOS Sierra and later, if you want a `hs.canvas` object to appear above full-screen windows you must hide the Hammerspoon Dock icon first using: `hs.dockicon.hide()`
 canvasMT.bringToFront = function(obj, ...)
     local args = table.pack(...)
 
@@ -358,7 +359,7 @@ canvasMT.isVisible = function(obj, ...) return not obj:isOccluded(...) end
 canvasMT.appendElements = function(obj, ...)
     local elementsArray = table.pack(...)
     if elementsArray.n == 1 and #elementsArray[1] ~= 0 then elementsArray = elementsArray[1] end
-    for i,v in ipairs(elementsArray) do obj:insertElement(v) end
+    for _,v in ipairs(elementsArray) do obj:insertElement(v) end
     return obj
 end
 
@@ -378,7 +379,7 @@ canvasMT.replaceElements = function(obj,  ...)
     local elementsArray = table.pack(...)
     if elementsArray.n == 1 and #elementsArray[1] ~= 0 then elementsArray = elementsArray[1] end
     for i,v in ipairs(elementsArray) do obj:assignElement(v, i) end
-    while (#obj > #elementArray) do obj:removeElement() end
+    while (#obj > #elementsArray) do obj:removeElement() end
     return obj
 end
 
@@ -413,7 +414,8 @@ canvasMT.rotateElement = function(obj, index, angle, point, append)
         }
     end
 
-    local currentTransform = obj:elementAttribute(index, "transformation")
+    -- TODO: currentTransform doesn't actually look like it's being used?
+    -- local currentTransform = obj:elementAttribute(index, "transformation")
     if append then
         obj[index].transformation = obj[index].transformation:translate(point.x, point.y)
                                                              :rotate(angle)
@@ -450,12 +452,12 @@ canvasMT.copy = function(obj)
                                  :level(obj:level())
                                  :transformation(obj:transformation())
                                  :wantsLayer(obj:wantsLayer())
-    for i, v in ipairs(obj:canvasDefaultKeys()) do
+    for _, v in ipairs(obj:canvasDefaultKeys()) do
       newObj:canvasDefaultFor(v, obj:canvasDefaultFor(v))
     end
 
     for i = 1, #obj, 1 do
-      for i2, v2 in ipairs(obj:elementKeys(i)) do
+      for _, v2 in ipairs(obj:elementKeys(i)) do
           local value = obj:elementAttribute(i, v2)
           if v2 ~= "canvas" then
               newObj:elementAttribute(i, v2, value)
@@ -526,8 +528,8 @@ elementMT.__newindex = function(_, k, v)
     end
 end
 
-elementMT.__pairs = function(_)
-    local obj = elementMT.__e[_]
+elementMT.__pairs = function(s)
+    local obj = elementMT.__e[s]
     local keys = {}
     if obj.field then
         keys = obj.value[obj.field]
@@ -535,9 +537,9 @@ elementMT.__pairs = function(_)
         keys = obj.value
     else
         if obj.index == "_default" then
-            for i, k in ipairs(obj.self:canvasDefaultKeys()) do keys[k] = _[k] end
+            for _, k in ipairs(obj.self:canvasDefaultKeys()) do keys[k] = s[k] end
         else
-            for i, k in ipairs(obj.self:elementKeys(obj.index)) do keys[k] = _[k] end
+            for _, k in ipairs(obj.self:elementKeys(obj.index)) do keys[k] = s[k] end
         end
     end
     return function(_, k)
@@ -643,7 +645,7 @@ canvasMT.__index = function(self, key)
                 return canvasMT[key]
             else
                 local answer
-                for i,v in ipairs(self) do
+                for _,v in ipairs(self) do
                     if v.id == key then
                         answer = v
                         break
@@ -725,35 +727,6 @@ module.help = function(what)
         error("unrecognized argument `" .. tostring(what) .. "`", 2)
     end
     print(help_table(0, help))
-end
-
---- hs.canvas.drawingWrapper([state]) -> boolean
---- Function
---- Get or set whether or not `hs.drawing` is replaced by a wrapper which uses this module.
----
---- Parameters:
----  * `state` - an optional boolean specifying whether or not `hs.drawing` should be replaced with a wrapper using this module.
----
---- Returns:
----  * the current, possibly newly changed, state.
----
---- Notes:
----  * This module was designed to address some of the limitations found with the `hs.drawing` module.  It is expected that at some point this module may completely replace the existing `hs.drawing` as it provides more flexibility and will be easier to extend with future additions. This function allows you to choose whether or not you wish to migrate fully to this new drawing model now to facilitate the testing of the wrapper or not.
----  * This wrapper was designed to fully mimic the current `hs.drawing` functions and methods -- you should not need to change your existing code in any way once this wrapper is enabled.  If you find that you do need to make adjustments or that something in the wrapper does not work as expected, please log an issue at https://github.com/Hammerspoon/hammerspoon/issues.
----
----  * When you change the wrapper state with this function, you must reload or restart your Hammerspoon application for the changes to go into effect.  It is expected that you will run this command from the Hammerspoon console like `hs.canvas.drawingWrapper(true)` and then reload your Hammerspoon configuration.  You will not need to do this again unless you wish to change back to the original `hs.drawing` module.
-module.drawingWrapper = function(...)
-    local args = table.pack(...)
-    local settings = require("hs.settings")
-    local oldState = settings.get("useCanvasWrappedDrawing") and true or false -- force nil to be false
-    if args.n > 0 then
-        local state = args[1] and true or false
-        settings.set("useCanvasWrappedDrawing", state)
-        if state ~= oldState then
-            print("You will need to reload or restart Hammerspoon for the changes to take effect")
-        end
-    end
-    return settings.get("useCanvasWrappedDrawing") and true or false
 end
 
 --- hs.canvas.percentages

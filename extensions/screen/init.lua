@@ -8,11 +8,11 @@
 
 local screen = require "hs.screen.internal"
 local geometry = require "hs.geometry"
-local imagemod = require "hs.image"
+require "hs.image"
 
 screen.watcher = require "hs.screen.watcher"
 
-local type,pairs,ipairs,min,max,cos,atan,huge=type,pairs,ipairs,math.min,math.max,math.cos,math.atan,math.huge
+local type,pairs,ipairs,cos,huge=type,pairs,ipairs,math.cos,math.huge
 local tinsert,tremove,tsort,tunpack=table.insert,table.remove,table.sort,table.unpack
 local getmetatable,pcall=getmetatable,pcall
 
@@ -38,6 +38,7 @@ end
 --- Parameters:
 ---  * hint - search criterion for the desired screen(s); it can be:
 ---   * a number as per `hs.screen:id()`
+---   * a string containing the UUID of the desired screen
 ---   * a string pattern that matches (via `string.match`) the screen name as per `hs.screen:name()` (for convenience, the matching will be done on lowercased strings)
 ---   * an hs.geometry *point* object, or constructor argument, with the *x and y position* of the screen in the current layout as per `hs.screen:position()`
 ---   * an hs.geometry *size* object, or constructor argument, with the *resolution* of the screen as per `hs.screen:fullFrame()`
@@ -68,7 +69,14 @@ function screen.find(p)
     if typ=='number' then
       for _,s in ipairs(screens) do if p==s:id() then return s end end return -- not found
     elseif typ=='string' then
-      for _,s in ipairs(screens) do local sname=s:name() if sname and sname:lower():find(p:lower()) then r[#r+1]=s end end
+      for _,s in ipairs(screens) do
+        local sname=s:name()
+        if s:getUUID() == p then
+          r[#r+1]=s
+        elseif sname and sname:lower():find(p:lower()) then
+          r[#r+1]=s
+        end
+      end
       if #r>0 then return tunpack(r) end
     elseif typ~='table' then error('hint can be a number, string or table',2) end
     local ok
@@ -133,7 +141,7 @@ function screen.screenPositions()
         f = f['to'..dir](f,nil,true,screens)
         if res[f] then f=nil end
         if f then -- found a screen
-          for i,s in ipairs(screens) do if s==f then tremove(screens,i) break end end
+          for i,ss in ipairs(screens) do if ss==f then tremove(screens,i) break end end
           local nx,ny=x+co[1],y+co[2]
           res[f]={x=nx,y=ny}--geometry(nx,ny)--
           findNeighbors(nx,ny,f,-co[1],-co[2])

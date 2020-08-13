@@ -2,13 +2,13 @@
 ---
 --- Manipulate running applications
 
-local uielement = hs.uielement  -- Make sure parent module loads
-local application = require "hs.application.internal"
-application.watcher = require "hs.application.watcher"
-package.loaded['hs.application']=application --preload application so it can be fully required by window
-local window = require "hs.window"
+local application = require("hs.application.internal")
+application.watcher = require("hs.application.watcher")
 local timer = require "hs.timer"
 local settings = require "hs.settings"
+
+local USERDATA_TAG = "hs.application"
+local objectMT     = hs.getObjectMetatable(USERDATA_TAG)
 
 local alternateNameMap = {}
 local spotlightEnabled = settings.get("HSenableSpotlightForNameSearches")
@@ -28,7 +28,7 @@ local realNameFor = function(value, exact)
             end
         end
         local returnedResults = {}
-        for k,v in pairs(results) do
+        for k,_ in pairs(results) do
             table.insert(returnedResults, k:match("^(.*)%.app$") or k)
         end
         return table.unpack(returnedResults)
@@ -52,7 +52,7 @@ local tunpack,tpack,tsort=table.unpack,table.pack,table.sort
 ---
 --- Returns:
 ---  * A table containing zero or more hs.window objects
-function application:visibleWindows()
+function objectMT.visibleWindows(self)
   local r={}
   if self:isHidden() then return r -- do not check :isHidden for every window
   else for _,w in ipairs(self:allWindows()) do if not w:isMinimized() then r[#r+1]=w end end end
@@ -68,10 +68,10 @@ end
 ---
 --- Returns:
 ---  * A boolean value indicating whether or not the application could be activated
-function application:activate(allWindows)
+function objectMT.activate(self, allWindows)
   allWindows=allWindows and true or false
   if self:isUnresponsive() then return false end
-  local win = self:_focusedwindow()
+  local win = self:focusedWindow()
   if win then
     return win:becomeMain() and self:_bringtofront(allWindows)
   else
@@ -82,7 +82,7 @@ end
 --- hs.application:name()
 --- Method
 --- Alias for `hs.application:title()`
-application.name=application.title
+objectMT.name=objectMT.title
 
 --- hs.application.get(hint) -> hs.application object
 --- Constructor
@@ -164,7 +164,7 @@ function application.find(hint,exact)
   tsort(r,function(a,b)return a:kind()>b:kind()end) -- gui apps first
   if exact or #r>0 then return tunpack(r) end
 
-  r=tpack(window.find(hint))
+  r=tpack(hs.window.find(hint))
   local rs={} for _,w in ipairs(r) do rs[w:application()]=true end -- :toSet
   for a in pairs(rs) do r[#r+1]=a end -- and back, no dupes
   if #r>0 then return tunpack(r) end
@@ -180,8 +180,8 @@ end
 --- Returns:
 ---  * one or more hs.window objects belonging to this application that match the supplied search criterion, or `nil` if none found
 
-function application:findWindow(hint)
-  return window.find(hint,false,self:allWindows())
+function objectMT.findWindow(self, hint)
+  return hs.window.find(hint,false,self:allWindows())
 end
 
 --- hs.application:getWindow(title) -> hs.window object
@@ -193,8 +193,8 @@ end
 ---
 --- Returns:
 ---  * the desired hs.window object belonging to this application, or `nil` if not found
-function application:getWindow(hint)
-  return tpack(window.find(hint,true,self:allWindows()),nil)[1]
+function objectMT.getWindow(self, hint)
+  return tpack(hs.window.find(hint,true,self:allWindows()),nil)[1]
 end
 
 --- hs.application.open(app[, wait, [waitForFirstWindow]]) -> hs.application object
@@ -388,7 +388,7 @@ application.menuGlyphs = setmetatable({
 local modifyNameMap = function(info, add)
     for _, item in ipairs(info) do
         local applicationName = item.kMDItemFSName
-        for __, alt in ipairs(item.kMDItemAlternateNames or {}) do
+        for _, alt in ipairs(item.kMDItemAlternateNames or {}) do
             alternateNameMap[alt:match("^(.*)%.app$") or alt] = add and applicationName or nil
         end
     end
@@ -408,7 +408,7 @@ local buildAlternateNameMap = function()
     spotlightWatcher = require"hs.spotlight".new()
     spotlightWatcher:queryString([[ kMDItemContentType = "com.apple.application-bundle" ]])
                     :callbackMessages("didUpdate", "inProgress")
-                    :setCallback(function(obj, msg, info)
+                    :setCallback(function(_, _, info)
                         if info then -- shouldn't be nil for didUpdate and inProgress, but check anyways
                             -- all three can occur in either message, so check them all!
                             if info.kMDQueryUpdateAddedItems   then
@@ -471,4 +471,3 @@ end
 application._alternateNameMap = alternateNameMap
 
 return application
-

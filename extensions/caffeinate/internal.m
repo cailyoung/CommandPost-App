@@ -3,15 +3,75 @@
 #import <IOKit/pwr_mgt/IOPMLib.h>
 #import <LuaSkin/LuaSkin.h>
 
+// Apple Private API items
 #define kIOPMAssertionAppliesToLimitedPowerKey  CFSTR("AppliesToLimitedPower")
+CFBundleRef loginFramework = NULL;
+typedef void (*SACLockScreenImmediatePtr)(void);
 
 static IOPMAssertionID noIdleDisplaySleep = 0;
 static IOPMAssertionID noIdleSystemSleep = 0;
 static IOPMAssertionID noSystemSleep = 0;
 
+NSString* stringFromError(unsigned int errorVal) {
+    NSDictionary *ioReturnMap =
+          @{@kIOReturnSuccess:          @"success",
+            @kIOReturnError:            @"general error",
+            @kIOReturnNoMemory:         @"memory allocation error",
+            @kIOReturnNoResources:      @"resource shortage",
+            @kIOReturnIPCError:         @"Mach IPC failure",
+            @kIOReturnNoDevice:         @"no such device",
+            @kIOReturnNotPrivileged:    @"privilege violation",
+            @kIOReturnBadArgument:      @"invalid argument",
+            @kIOReturnLockedRead:       @"device is read locked",
+            @kIOReturnLockedWrite:      @"device is write locked",
+            @kIOReturnExclusiveAccess:  @"device is exclusive access",
+            @kIOReturnBadMessageID:     @"bad IPC message ID",
+            @kIOReturnUnsupported:      @"unsupported function",
+            @kIOReturnVMError:          @"virtual memory error",
+            @kIOReturnInternalError:    @"internal driver error",
+            @kIOReturnIOError:          @"I/O error",
+            @kIOReturnCannotLock:       @"cannot acquire lock",
+            @kIOReturnNotOpen:          @"device is not open",
+            @kIOReturnNotReadable:      @"device is not readable",
+            @kIOReturnNotWritable:      @"device is not writeable",
+            @kIOReturnNotAligned:       @"alignment error",
+            @kIOReturnBadMedia:         @"media error",
+            @kIOReturnStillOpen:        @"device is still open",
+            @kIOReturnRLDError:         @"rld failure",
+            @kIOReturnDMAError:         @"DMA failure",
+            @kIOReturnBusy:             @"device is busy",
+            @kIOReturnTimeout:          @"I/O timeout",
+            @kIOReturnOffline:          @"device is offline",
+            @kIOReturnNotReady:         @"device is not ready",
+            @kIOReturnNotAttached:      @"device/channel is not attached",
+            @kIOReturnNoChannels:       @"no DMA channels available",
+            @kIOReturnNoSpace:          @"no space for data",
+            @kIOReturnPortExists:       @"device port already exists",
+            @kIOReturnCannotWire:       @"cannot wire physical memory",
+            @kIOReturnNoInterrupt:      @"no interrupt attached",
+            @kIOReturnNoFrames:         @"no DMA frames enqueued",
+            @kIOReturnMessageTooLarge:  @"message is too large",
+            @kIOReturnNotPermitted:     @"operation is not permitted",
+            @kIOReturnNoPower:          @"device is without power",
+            @kIOReturnNoMedia:          @"media is not present",
+            @kIOReturnUnformattedMedia: @"media is not formatted",
+            @kIOReturnUnsupportedMode:  @"unsupported mode",
+            @kIOReturnUnderrun:         @"data underrun",
+            @kIOReturnOverrun:          @"data overrun",
+            @kIOReturnDeviceError:      @"device error",
+            @kIOReturnNoCompletion:     @"no completion routine",
+            @kIOReturnAborted:          @"operation was aborted",
+            @kIOReturnNoBandwidth:      @"bus bandwidth would be exceeded",
+            @kIOReturnNotResponding:    @"device is not responding",
+            @kIOReturnInvalid:          @"unanticipated driver error",
+            };
+
+    return [ioReturnMap objectForKey:[NSNumber numberWithInt:errorVal]];
+}
+
 // Create an IOPM Assertion of specified type and store its ID in the specified variable
 static void caffeinate_create_assertion(lua_State *L, CFStringRef assertionType, IOPMAssertionID *assertionID) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     IOReturn result = 1;
 
     if (*assertionID) return;
@@ -26,13 +86,13 @@ static void caffeinate_create_assertion(lua_State *L, CFStringRef assertionType,
                                                 assertionID);
 
     if (result != kIOReturnSuccess) {
-        [skin logError:@"caffeinate_create_assertion: failed"];
+        [skin logError:[NSString stringWithFormat:@"caffeinate_create_assertion: failed (%@)", stringFromError(result)]];
     }
 }
 
 // Release a previously stored assertion
 static void caffeinate_release_assertion(lua_State *L, IOPMAssertionID *assertionID) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     IOReturn result = 1;
 
     if (!*assertionID) return;
@@ -40,7 +100,7 @@ static void caffeinate_release_assertion(lua_State *L, IOPMAssertionID *assertio
     result = IOPMAssertionRelease(*assertionID);
 
     if (result != kIOReturnSuccess) {
-        [skin logError:@"caffeinate_release_assertion: failed"];
+        [skin logError:[NSString stringWithFormat:@"caffeinate_release_assertion: failed (%@)", stringFromError(result)]];
     }
 
     *assertionID = 0;
@@ -90,7 +150,7 @@ static int caffeinate_isIdleSystemSleepPrevented(lua_State *L) {
 
 // Prevent system sleep
 static int caffeinate_preventSystemSleep(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     IOReturn result = 1;
     BOOL ac_and_battery = false;
 
@@ -111,7 +171,7 @@ static int caffeinate_preventSystemSleep(lua_State *L) {
                                           kIOPMAssertionAppliesToLimitedPowerKey,
                                           (CFBooleanRef)value);
         if (result != kIOReturnSuccess) {
-            [skin logError:@"ERROR: Unable to set systemSleep assertion property"];
+            [skin logError:[NSString stringWithFormat:@"ERROR: Unable to set systemSleep assertion property (%@)", stringFromError(result)]];
         }
     }
 
@@ -160,7 +220,7 @@ static int caffeinate_systemSleep(lua_State *L __unused) {
 ///  * This is intended to simulate user activity, for example to prevent displays from sleeping, or to wake them up
 ///  * It is not mandatory to re-use assertion IDs if you are calling this function mulitple times, but it is recommended that you do so if the calls are related
 static int caffeinate_declareUserActivity(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TNUMBER | LS_TINTEGER | LS_TNIL | LS_TOPTIONAL, LS_TBREAK]; // The LS_TNIL is so people can call foo = hs.caffeinate.declareUserActivity(foo) and not have it error out the first time
 
     IOPMAssertionID assertionID = kIOPMNullAssertionID;
@@ -172,6 +232,40 @@ static int caffeinate_declareUserActivity(lua_State *L) {
 
     lua_pushinteger(L, (int)assertionID);
     return 1;
+}
+
+/// hs.caffeinate.lockScreen()
+/// Function
+/// Locks the displays
+///
+/// Parameters:
+///  * None
+///
+/// Returns:
+///  * None
+///
+/// Notes:
+///  * This function uses private Apple APIs and could therefore stop working in any given release of macOS without warning.
+static int caffeinate_lockScreen(lua_State *L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
+    [skin checkArgs:LS_TBREAK];
+
+    // Load the private API we need to call SACLockScreenImmediate()
+    if (!loginFramework) {
+        NSString *bundlePath = @"/System/Library/PrivateFrameworks/login.framework";
+        NSURL *bundleURL = [NSURL fileURLWithPath:bundlePath];
+        loginFramework = CFBundleCreate(kCFAllocatorDefault, (CFURLRef)bundleURL);
+    }
+
+    SACLockScreenImmediatePtr SACLockScreenImmediate;
+    SACLockScreenImmediate = (SACLockScreenImmediatePtr)CFBundleGetFunctionPointerForName(loginFramework, (__bridge CFStringRef)@"SACLockScreenImmediate");
+    if (!SACLockScreenImmediate) {
+        [skin logError:@"Unable to load SACLockScreenImmediate from private login.framework"];
+    } else {
+        SACLockScreenImmediate();
+    }
+
+    return 0;
 }
 
 /// hs.caffeinate.sessionProperties()
@@ -187,7 +281,7 @@ static int caffeinate_declareUserActivity(lua_State *L) {
 /// Notes:
 ///  * The keys in this dictionary will vary based on the current state of the system (e.g. local vs VNC login, screen locked vs unlocked).
 static int caffeinate_sessionProperties(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TBREAK];
 
     CFDictionaryRef ref = CGSessionCopyCurrentDictionary();
@@ -207,6 +301,11 @@ static int caffeinate_gc(lua_State *L) {
     caffeinate_allowIdleSystemSleep(L);
     caffeinate_allowSystemSleep(L);
 
+    if (loginFramework) {
+        CFRelease(loginFramework);
+        loginFramework = NULL ;
+    }
+
     return 0;
 }
 
@@ -225,6 +324,7 @@ static const luaL_Reg caffeinatelib[] = {
     {"systemSleep", caffeinate_systemSleep},
 
     {"declareUserActivity", caffeinate_declareUserActivity},
+    {"lockScreen", caffeinate_lockScreen},
 
     {"sessionProperties", caffeinate_sessionProperties},
 
@@ -240,8 +340,8 @@ static const luaL_Reg metalib[] = {
 /* NOTE: The substring "hs_caffeinate_internal" in the following function's name
          must match the require-path of this file, i.e. "hs.caffeinate.internal". */
 
-int luaopen_hs_caffeinate_internal(lua_State *L __unused) {
-    LuaSkin *skin = [LuaSkin shared];
+int luaopen_hs_caffeinate_internal(lua_State *L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin registerLibrary:caffeinatelib metaFunctions:metalib];
 
     return 1;

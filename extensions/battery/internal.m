@@ -415,6 +415,38 @@ static int battery_psuSerial(lua_State* L) {
     return 1;
 }
 
+/// hs.battery.psuSerialString() -> string
+/// Function
+/// Returns the serial string of the attached power supply, if present
+///
+/// Parameters:
+///  * None
+///
+/// Returns:
+///  * A string containing the power supply's serial, or an empty string if no serial can be found
+// This uses a private API definition
+#ifndef kIOPSPowerAdapterSerialStringKey
+#define kIOPSPowerAdapterSerialStringKey    "SerialString"
+#endif
+static int battery_psuSerialString(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
+    [skin checkArgs:LS_TBREAK];
+
+    NSString *serial = @"";
+
+    CFDictionaryRef psuInfo = IOPSCopyExternalPowerAdapterDetails();
+    if (psuInfo) {
+        NSString *serialString = (__bridge NSString *)CFDictionaryGetValue(psuInfo, CFSTR(kIOPSPowerAdapterSerialStringKey));
+        if (serialString) {
+            serial = serialString;
+        }
+        CFRelease(psuInfo);
+    }
+
+    [skin pushNSObject:serial];
+    return 1;
+}
+
 /// hs.battery.otherBatteryInfo() -> table
 /// Function
 /// Returns information about non-PSU batteries (e.g. bluetooth accessories)
@@ -425,7 +457,7 @@ static int battery_psuSerial(lua_State* L) {
 /// Returns:
 ///  * A table containing information about other batteries known to the system, or an empty table if no devices were found
 static int battery_others(lua_State*L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
 
     mach_port_t     masterPort;
     kern_return_t   kr;
@@ -465,8 +497,11 @@ static int battery_others(lua_State*L) {
             }
         }
 
+        CFRelease(properties);
         IOObjectRelease(obj);
     }
+
+    IOObjectRelease(ite);
 
 lua_return:
     [skin pushNSObject:batteryInfo];
@@ -510,7 +545,7 @@ lua_return:
 ///  * Please report any crashes from this function - it's likely that there are Bluetooth devices we haven't tested which may return weird data
 ///  * Many/Most/All non-Apple party products will likely return zeros for all of the battery related fields here, as will Apple HID devices. It seems that these private APIs mostly exist to support Apple/Beats headphones.
 static int battery_private(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TBREAK];
 
     NSMutableArray *privateInfo = [[NSMutableArray alloc] init];
@@ -572,13 +607,14 @@ static const luaL_Reg battery_lib[] = {
     {"isFinishingCharge", battery_isfinishingcharge},
     {"powerSource", battery_powersource},
     {"psuSerial", battery_psuSerial},
+    {"psuSerialString", battery_psuSerialString},
     {"otherBatteryInfo", battery_others},
     {"privateBluetoothBatteryInfo", battery_private},
     {NULL, NULL}
 };
 
-int luaopen_hs_battery_internal(lua_State* L __unused) {
-    LuaSkin *skin = [LuaSkin shared];
+int luaopen_hs_battery_internal(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin registerLibrary:battery_lib metaFunctions:nil];
 
     return 1;

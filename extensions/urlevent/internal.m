@@ -3,6 +3,7 @@
 #import <CoreServices/CoreServices.h>
 #import <LuaSkin/LuaSkin.h>
 #import "../../Hammerspoon/MJAppDelegate.h"
+#import "../../Hammerspoon/MJDockIcon.h"
 
 static int refTable;
 NSArray *defaultContentTypes = nil;
@@ -18,7 +19,7 @@ NSArray *defaultContentTypes = nil;
 - (void)handleStartupEvents;
 - (void)handleAppleEvent:(NSAppleEventDescriptor *)event withReplyEvent: (NSAppleEventDescriptor *)replyEvent;
 - (void)callbackWithURL:(NSString *)openUrl;
-- (void)gc;
+- (void)gcWithState:(lua_State *)L;
 @end
 
 static HSURLEventHandler *eventHandler;
@@ -42,8 +43,8 @@ static HSURLEventHandler *eventHandler;
     return self;
 }
 
-- (void)gc {
-    LuaSkin *skin = [LuaSkin shared];
+- (void)gcWithState:(lua_State *)L {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
 
     [self.appleEventManager removeEventHandlerForEventClass:kInternetEventClass
                                                  andEventID:kAEGetURL];
@@ -85,21 +86,26 @@ static HSURLEventHandler *eventHandler;
 }
 
 - (void)handleAppleEvent:(NSAppleEventDescriptor *)event withReplyEvent: (NSAppleEventDescriptor * __unused)replyEvent {
+    // This is a completely disgusting workaround - starting in macOS 10.15 for some reason the OS reveals our Dock icon even if it's hidden, before we receive an Apple Event, so let's reassert our expected state before we go any further.
+    MJDockIconSetVisible(MJDockIconVisible());
+
     [self callbackWithURL:[[event paramDescriptorForKeyword:keyDirectObject] stringValue]];
 }
 
 - (void)callbackWithURL:(NSString *)openUrl {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:NULL];
+    _lua_stackguard_entry(skin.L);
 
     if (self.fnCallback == LUA_NOREF || self.fnCallback == LUA_REFNIL) {
         // Lua hasn't registered a callback. This possibly means we have been require()'d as hs.urlevent.internal and not set up properly. Weird. Refuse to do anything
         [skin logWarn:[NSString stringWithFormat:@"hs.urlevent callbackWithURL received a URL with no callback set: %@", openUrl]];
+        _lua_stackguard_exit(skin.L);
         return;
     }
 
     if ([openUrl hasPrefix:@"/"]) {
         openUrl = [NSString stringWithFormat:@"file://%@", openUrl];
-        openUrl = [openUrl stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+        openUrl = [openUrl stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
     }
 
     // Split the URL into its components
@@ -107,6 +113,7 @@ static HSURLEventHandler *eventHandler;
 
     if (!url) {
         NSLog(@"ERROR: Unable to parse '%@' as a URL", openUrl);
+        _lua_stackguard_exit(skin.L);
         return;
     }
 
@@ -118,8 +125,8 @@ static HSURLEventHandler *eventHandler;
         NSArray *bits = [queryPair componentsSeparatedByString:@"="];
         if ([bits count] != 2) { continue; }
 
-        NSString *key = [[bits objectAtIndex:0] stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
-        NSString *value = [[bits objectAtIndex:1] stringByReplacingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
+        NSString *key = [[bits objectAtIndex:0] stringByRemovingPercentEncoding];
+        NSString *value = [[bits objectAtIndex:1] stringByRemovingPercentEncoding];
 
         [pairs setObject:value forKey:key];
     }
@@ -129,12 +136,8 @@ static HSURLEventHandler *eventHandler;
     [skin pushNSObject:[url host]];
     [skin pushNSObject:pairs];
     [skin pushNSObject:[url absoluteString]];
-
-    if (![skin protectedCallAndTraceback:4 nresults:0]) {
-        const char *errorMsg = lua_tostring(skin.L, -1);
-        [skin logError:[NSString stringWithFormat:@"hs.urlevent callback error: %s for URL %@", errorMsg, [url absoluteString]]];
-        lua_pop(skin.L, 1) ; // remove error message
-    }
+    [skin protectedCallAndError:[NSString stringWithFormat:@"hs.urlevent callback for %@", url.absoluteString] nargs:4 nresults:0];
+    _lua_stackguard_exit(skin.L);
 }
 @end
 
@@ -142,7 +145,7 @@ static HSURLEventHandler *eventHandler;
 
 // Rather than manage complex callback state from C, we just have one path into Lua for all events, and events are directed to their callbacks from there
 static int urleventSetCallback(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
 
     luaL_checktype(L, 1, LUA_TFUNCTION);
     lua_pushvalue(L, 1);
@@ -165,7 +168,7 @@ static int urleventSetCallback(lua_State *L) {
 /// Notes:
 ///  * You don't have to call this function if you want CommandPost to permanently be your default handler. Only use this if you want the handler to be automatically reverted to something else when CommandPost exits/reloads.
 static int urleventsetRestoreHandler(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TSTRING, LS_TSTRING, LS_TBREAK];
 
     [eventHandler.restoreHandlers setObject:[skin toNSObjectAtIndex:2] forKey:[skin toNSObjectAtIndex:1]];
@@ -188,7 +191,7 @@ static int urleventsetRestoreHandler(lua_State *L) {
 /// Notes:
 ///  * Changing the default handler for http/https URLs will display a system prompt asking the user to confirm the change
 static int urleventsetDefaultHandler(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TSTRING, LS_TSTRING|LS_TOPTIONAL, LS_TBREAK];
 
     OSStatus status;
@@ -232,7 +235,7 @@ static int urleventsetDefaultHandler(lua_State *L) {
 /// Returns:
 ///  * A string containing the bundle identifier of the current default application
 static int urleventgetDefaultHandler(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TSTRING, LS_TBREAK];
 
     NSString *scheme = [NSString stringWithUTF8String:lua_tostring(L, 1)];
@@ -257,7 +260,7 @@ static int urleventgetDefaultHandler(lua_State *L) {
 /// Returns:
 ///  * A table containing the bundle identifiers of all applications that can handle the scheme
 static int urleventgetAllHandlersForScheme(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TSTRING, LS_TBREAK];
 
     NSString *scheme = [NSString stringWithUTF8String:lua_tostring(L, 1)];
@@ -289,7 +292,7 @@ static int urleventgetAllHandlersForScheme(lua_State *L) {
 /// Returns:
 ///  * True if the application was launched successfully, otherwise false
 static int urleventopenURLWithBundle(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TSTRING, LS_TSTRING, LS_TBREAK];
 
     BOOL result = false;
@@ -311,8 +314,7 @@ static int urleventopenURLWithBundle(lua_State *L) {
 static int urlevent_setup() {
     eventHandler = [[HSURLEventHandler alloc] init];
 
-    defaultContentTypes = @[(__bridge NSString *)kUTTypeHTML,
-                            (__bridge NSString *)kUTTypeURL,
+    defaultContentTypes = @[(__bridge NSString *)kUTTypeURL,
                             (__bridge NSString *)kUTTypeFileURL,
                             (__bridge NSString *)kUTTypeText
                             ];
@@ -322,8 +324,8 @@ static int urlevent_setup() {
 
 // ----------------------- Lua/hs glue GAR ---------------------
 
-static int urlevent_gc(lua_State* __unused L) {
-    [eventHandler gc];
+static int urlevent_gc(lua_State* L) {
+    [eventHandler gcWithState:L];
     eventHandler = nil;
 
     return 0;
@@ -349,8 +351,8 @@ static const luaL_Reg urlevent_gclib[] = {
 /* NOTE: The substring "hs_urlevent_internal" in the following function's name
          must match the require-path of this file, i.e. "hs.urlevent.internal". */
 
-int luaopen_hs_urlevent_internal(lua_State *L __unused) {
-    LuaSkin *skin = [LuaSkin shared];
+int luaopen_hs_urlevent_internal(lua_State *L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
 
     urlevent_setup();
 

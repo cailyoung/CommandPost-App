@@ -1,12 +1,17 @@
-#import <Cocoa/Cocoa.h>
-#import <Carbon/Carbon.h>
-#import <LuaSkin/LuaSkin.h>
+@import Cocoa ;
+@import Carbon ;
+@import LuaSkin ;
 
 // ----------------------- Definitions ---------------------
 
 #define USERDATA_TAG "hs.menubar"
 static int refTable;
 #define get_item_arg(L, idx) ((menubaritem_t *)luaL_checkudata(L, idx, USERDATA_TAG))
+
+// Adds undocumented "appearance" argument to "popUpMenuPositioningItem":
+@interface NSMenu (MISSINGOrder)
+- (BOOL)popUpMenuPositioningItem:(id)arg1 atLocation:(struct CGPoint)arg2 inView:(id)arg3 appearance:(id)arg4;
+@end
 
 // modified from https://github.com/shergin/NSStatusBar-MISSINGOrder
 
@@ -38,7 +43,7 @@ typedef NS_ENUM(NSInteger, NSStatusBarItemPriority) {
             [invocation invoke];
         }
     } else {
-        [[LuaSkin shared] logWarn:[NSString stringWithFormat:@"%s:_insertStatusItem:withPriority: unavailable in this version of OS X", USERDATA_TAG]] ;
+        [LuaSkin logWarn:[NSString stringWithFormat:@"%s:_insertStatusItem:withPriority: unavailable in this version of OS X", USERDATA_TAG]] ;
     }
 }
 
@@ -60,7 +65,7 @@ typedef NS_ENUM(NSInteger, NSStatusBarItemPriority) {
 
         [self insertStatusItem:statusItem withPriority:priority] ;
     } else {
-        [[LuaSkin shared] logWarn:[NSString stringWithFormat:@"%s:_statusItemWithLength:withPriority: unavailable in this version of OS X", USERDATA_TAG]] ;
+        [LuaSkin logWarn:[NSString stringWithFormat:@"%s:_statusItemWithLength:withPriority: unavailable in this version of OS X", USERDATA_TAG]] ;
     }
 
     if (!statusItem) {
@@ -88,7 +93,7 @@ typedef NS_ENUM(NSInteger, NSStatusBarItemPriority) {
         [invocation invoke] ;
         [invocation getReturnValue:&result] ;
     }else {
-        [[LuaSkin shared] logWarn:[NSString stringWithFormat:@"%s:_priority unavailable in this version of OS X", USERDATA_TAG]] ;
+        [LuaSkin logWarn:[NSString stringWithFormat:@"%s:_priority unavailable in this version of OS X", USERDATA_TAG]] ;
     }
     return result ;
 }
@@ -99,11 +104,13 @@ typedef NS_ENUM(NSInteger, NSStatusBarItemPriority) {
 @property lua_State *L;
 @property int fn;
 @property int item;
+
+- (void)callback_runner;
 @end
 @implementation HSMenubarCallbackObject
 // Generic callback runner that will execute a Lua function stored in self.fn
 - (void) callback_runner {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:NULL];
     lua_State *L = skin.L;
 
     BOOL fn_result;
@@ -113,11 +120,11 @@ typedef NS_ENUM(NSInteger, NSStatusBarItemPriority) {
 
     if (event != nil) {
         NSUInteger theFlags = [event modifierFlags];
-        BOOL isCommandKey = (theFlags & NSCommandKeyMask) != 0;
-        BOOL isShiftKey = (theFlags & NSShiftKeyMask) != 0;
-        BOOL isOptKey = (theFlags & NSAlternateKeyMask) != 0;
-        BOOL isCtrlKey = (theFlags & NSControlKeyMask) != 0;
-        BOOL isFnKey = (theFlags & NSFunctionKeyMask) != 0;
+        BOOL isCommandKey = (theFlags & NSEventModifierFlagCommand) != 0;
+        BOOL isShiftKey = (theFlags & NSEventModifierFlagShift) != 0;
+        BOOL isOptKey = (theFlags & NSEventModifierFlagOption) != 0;
+        BOOL isCtrlKey = (theFlags & NSEventModifierFlagControl) != 0;
+        BOOL isFnKey = (theFlags & NSEventModifierFlagFunction) != 0;
 
         lua_newtable(L);
 
@@ -149,6 +156,8 @@ typedef NS_ENUM(NSInteger, NSStatusBarItemPriority) {
         [skin logError:[NSString stringWithFormat:@"hs.menubar:setClickCallback() callback error: %s", errorMsg]];
         return;
     }
+
+    // There are no lua_pop()s on errors here, they are handled by the functions that call this one
 }
 
 @end
@@ -167,19 +176,22 @@ typedef struct _menubaritem_t {
 } menubaritem_t;
 
 // Define an array to track delegates for dynamic menu objects
-NSMutableArray *dynamicMenuDelegates;
+static NSMutableArray *dynamicMenuDelegates;
 
 // Define an object for delegate objects to handle clicks on menubar items that have no menu, but wish to act on clicks
 @interface HSMenubarItemClickDelegate : HSMenubarCallbackObject
 @end
 @implementation HSMenubarItemClickDelegate
 - (void) click:(id)sender {
+    LuaSkin *skin = [LuaSkin sharedWithState:NULL];
+    _lua_stackguard_entry(skin.L);
     // Issue #909 -- if the callback causes the menu to be replaced, we crash if this delegate disappears from beneath us... this keeps it from being collected before the callback is done.
-    NSObject *myDelegate = [sender representedObject] ;
+    NSObject *myDelegate = sender ? [(NSMenuItem *)sender representedObject] : nil ;
     [self callback_runner];
     // error or return value (ignored in this case), we gotta cleanup
-    lua_pop(self.L, 1) ;
-    myDelegate = nil ;
+    lua_pop(skin.L, 1) ;
+    _lua_stackguard_exit(skin.L);
+    myDelegate = nil ; // NOTE: DO NOT USE `self` AFTER THIS POINT, IT WILL HAVE BEEN DEALLOCATED.
 }
 @end
 
@@ -189,18 +201,20 @@ NSMutableArray *dynamicMenuDelegates;
 @end
 @implementation HSMenubarItemMenuDelegate
 - (void) menuNeedsUpdate:(NSMenu *)menu {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:NULL];
+    _lua_stackguard_entry(skin.L);
     [self callback_runner];
 
     // Ensure the callback pushed a table onto the stack, then remove any existing menu structure and parse the table into a new menu
-    if (lua_type(self.L, lua_gettop(self.L)) == LUA_TTABLE) {
-        erase_menu_items(self.L, menu);
-        parse_table(self.L, lua_gettop(self.L), menu, self.stateBoxImageSize);
+    if (lua_type(skin.L, lua_gettop(skin.L)) == LUA_TTABLE) {
+        erase_menu_items(skin.L, menu);
+        parse_table(skin.L, lua_gettop(skin.L), menu, self.stateBoxImageSize);
     } else {
         [skin logError:@"hs.menubar:setMenu() callback must return a valid table"];
     }
     // error or return value, we gotta cleanup
-    lua_pop(self.L, 1) ;
+    lua_pop(skin.L, 1) ;
+    _lua_stackguard_exit(skin.L);
 }
 @end
 
@@ -216,7 +230,7 @@ static NSSize proportionallyScaleStateImageSize(NSImage *theImage, NSSize stateB
 
 // Helper function to parse a Lua table and turn it into an NSMenu hierarchy (is recursive, so may do terrible things on huge tables)
 void parse_table(lua_State *L, int idx, NSMenu *menu, NSSize stateBoxImageSize) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
 
     lua_pushnil(L); // Push a nil to the top of the stack, which lua_next() will interpret as "fetch the first item of the table"
     while (lua_next(L, idx) != 0) {
@@ -270,8 +284,13 @@ void parse_table(lua_State *L, int idx, NSMenu *menu, NSSize stateBoxImageSize) 
                 // Create the submenu, populate it and attach it to our current menu item
                 NSMenu *subMenu = [[NSMenu alloc] initWithTitle:@"HammerspoonSubMenu"];
                 [subMenu setAutoenablesItems:NO];
-                parse_table(L, lua_gettop(L), subMenu, stateBoxImageSize);
-                [menuItem setSubmenu:subMenu];
+                // We're about to recurse into ourselves. Each recursion to this point adds 3 items to the Lua stack, which defaults to 20 slots. Therefore at an 8th recursion we'll overflow the Lua stack. Since its theoretical limit is very high (typically 4096) we can make the risky assumption that nobody would recurse a menu over 200 times, and just grow the stack as we go.
+                if (lua_checkstack(L, 20)) {
+                    parse_table(L, lua_gettop(L), subMenu, stateBoxImageSize);
+                    [menuItem setSubmenu:subMenu];
+                } else {
+                    [skin logError:@"hs.menubar menu recursion depth exceeded."];
+                }
             }
             lua_pop(L, 1);
 
@@ -344,32 +363,41 @@ void parse_table(lua_State *L, int idx, NSMenu *menu, NSSize stateBoxImageSize) 
 // MARK: image keys
             lua_getfield(L, -1, "image") ;
             if (luaL_testudata(L, -1, "hs.image")) {
-                NSImage *image = [[skin luaObjectAtIndex:-1 toClass:"NSImage"] copy];
-                [menuItem setImage:image] ;
+                NSImage *image = [skin luaObjectAtIndex:-1 toClass:"NSImage"] ;
+                if (image) [menuItem setImage:[image copy]] ;
             }
             lua_pop(L, 1) ;
 
             lua_getfield(L, -1, "onStateImage") ;
             if (luaL_testudata(L, -1, "hs.image")) {
-                NSImage *image = [[skin luaObjectAtIndex:-1 toClass:"NSImage"] copy] ;
-                [image setSize:proportionallyScaleStateImageSize(image, stateBoxImageSize)] ;
-                [menuItem setOnStateImage:image] ;
+                NSImage *image = [skin luaObjectAtIndex:-1 toClass:"NSImage"] ;
+                if (image) {
+                    image = [image copy] ;
+                    [image setSize:proportionallyScaleStateImageSize(image, stateBoxImageSize)] ;
+                    [menuItem setOnStateImage:image] ;
+                }
             }
             lua_pop(L, 1) ;
 
             lua_getfield(L, -1, "offStateImage") ;
             if (luaL_testudata(L, -1, "hs.image")) {
-                NSImage *image = [[skin luaObjectAtIndex:-1 toClass:"NSImage"] copy]  ;
-                [image setSize:proportionallyScaleStateImageSize(image, stateBoxImageSize)] ;
-                [menuItem setOffStateImage:image] ;
+                NSImage *image = [skin luaObjectAtIndex:-1 toClass:"NSImage"] ;
+                if (image) {
+                    image = [image copy] ;
+                    [image setSize:proportionallyScaleStateImageSize(image, stateBoxImageSize)] ;
+                    [menuItem setOffStateImage:image] ;
+                }
             }
             lua_pop(L, 1) ;
 
             lua_getfield(L, -1, "mixedStateImage") ;
             if (luaL_testudata(L, -1, "hs.image")) {
-                NSImage *image = [[skin luaObjectAtIndex:-1 toClass:"NSImage"] copy]  ;
-                [image setSize:proportionallyScaleStateImageSize(image, stateBoxImageSize)] ;
-                [menuItem setMixedStateImage:image] ;
+                NSImage *image = [skin luaObjectAtIndex:-1 toClass:"NSImage"] ;
+                if (image) {
+                    image = [image copy] ;
+                    [image setSize:proportionallyScaleStateImageSize(image, stateBoxImageSize)] ;
+                    [menuItem setMixedStateImage:image] ;
+                }
             }
             lua_pop(L, 1) ;
 
@@ -392,7 +420,7 @@ void parse_table(lua_State *L, int idx, NSMenu *menu, NSSize stateBoxImageSize) 
 
 // Recursively remove all items from a menu, de-allocating their delegates as we go
 void erase_menu_items(lua_State *L, NSMenu *menu) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
 
     for (NSMenuItem *menuItem in [menu itemArray]) {
         HSMenubarItemClickDelegate *target = [menuItem representedObject];
@@ -414,8 +442,8 @@ void erase_menu_items(lua_State *L, NSMenu *menu) {
 }
 
 // Remove and clean up a dynamic menu delegate
-void erase_menu_delegate(lua_State *L __unused, NSMenu *menu) {
-    LuaSkin *skin = [LuaSkin shared];
+void erase_menu_delegate(lua_State *L, NSMenu *menu) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
 
     HSMenubarItemMenuDelegate *delegate = [menu delegate];
     if (delegate) {
@@ -469,14 +497,19 @@ static void geom_pushrect(lua_State* L, NSRect rect) {
 ///  * A hidden menubaritem can be added to the system menubar by calling hs.menubar:returnToMenuBar() or used as a pop-up menu by calling hs.menubar:popupMenu().
 static int menubarNew(lua_State *L) {
     NSStatusBar *statusBar = [NSStatusBar systemStatusBar];
-    NSStatusItem *statusItem = [statusBar statusItemWithLength:NSVariableStatusItemLength];
+    NSStatusItem *statusItem ;
+    if (lua_isboolean(L, 1) && !lua_toboolean(L, 1)) {
+        statusItem = [[NSStatusItem alloc] init] ;
+    } else {
+        statusItem = [statusBar statusItemWithLength:NSVariableStatusItemLength];
+    }
 
     if (statusItem) {
         menubaritem_t *menuBarItem = lua_newuserdata(L, sizeof(menubaritem_t));
         memset(menuBarItem, 0, sizeof(menubaritem_t));
 
         menuBarItem->menuBarItemObject = (__bridge_retained void*)statusItem;
-        menuBarItem->click_callback = nil;
+        menuBarItem->click_callback = NULL;
         menuBarItem->click_fn = LUA_NOREF;
         menuBarItem->removed = NO ;
 
@@ -487,7 +520,6 @@ static int menubarNew(lua_State *L) {
         lua_setmetatable(L, -2);
 
         if (lua_isboolean(L, 1) && !lua_toboolean(L, 1)) {
-              [statusBar removeStatusItem:statusItem];
               menuBarItem->removed = YES ;
         }
     } else {
@@ -512,7 +544,7 @@ static int menubarNew(lua_State *L) {
 ///
 ///  * This constructor uses undocumented methods in the NSStatusBar and NSStatusItem classes; because of this, we cannot guarantee that it will work with future versions of OS X.  This constructor has been written so that if the necessary private methods are not present, then a warning will be sent to the Hammerspoon console and the menubar item will be created in its default position -- the equivalent of using the [hs.menubar.new](#new) constructor instead of this one.
 static int menubarNewWithPriority(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TNUMBER | LS_TINTEGER,
                     LS_TBREAK] ;
 
@@ -526,7 +558,7 @@ static int menubarNewWithPriority(lua_State *L) {
         memset(menuBarItem, 0, sizeof(menubaritem_t));
 
         menuBarItem->menuBarItemObject = (__bridge_retained void*)statusItem;
-        menuBarItem->click_callback = nil;
+        menuBarItem->click_callback = NULL;
         menuBarItem->click_fn = LUA_NOREF;
         menuBarItem->removed = NO ;
 
@@ -556,7 +588,7 @@ static int menubarNewWithPriority(lua_State *L) {
 ///  * If you set an icon as well as a title, they will both be displayed next to each other
 ///  * Has no affect on the display of a pop-up menu, but changes will be be in effect if hs.menubar:returnToMenuBar() is called on the menubaritem.
 static int menubarSetTitle(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TANY | LS_TOPTIONAL, LS_TBREAK];
     menubaritem_t *menuBarItem = get_item_arg(L, 1);
 
@@ -619,7 +651,8 @@ static int menubarSetIcon(lua_State *L) {
     if (lua_isnoneornil(L, 2)) {
         iconImage = nil;
     } else {
-        iconImage = [[LuaSkin shared] luaObjectAtIndex:2 toClass:"NSImage"] ;
+        LuaSkin *skin = [LuaSkin sharedWithState:L] ;
+        iconImage = [skin luaObjectAtIndex:2 toClass:"NSImage"] ;
 
         if (!iconImage) {
             lua_pushnil(L);
@@ -651,7 +684,7 @@ static int menubarSetIcon(lua_State *L) {
 /// Notes:
 ///  * Has no affect on the display of a pop-up menu, but changes will be be in effect if hs.menubar:returnToMenuBar() is called on the menubaritem.
 static int menubarSetTooltip(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING, LS_TBREAK];
     menubaritem_t *menuBarItem = get_item_arg(L, 1);
     NSString *toolTipText = [skin toNSObjectAtIndex:2];
@@ -662,12 +695,12 @@ static int menubarSetTooltip(lua_State *L) {
     return 1 ;
 }
 
-/// hs.menubar:setClickCallback(fn) -> menubaritem
+/// hs.menubar:setClickCallback([fn]) -> menubaritem
 /// Method
 /// Registers a function to be called when the menubar item is clicked
 ///
 /// Parameters:
-///  * `fn` - A function to be called when the menubar item is clicked. If the argument is `nil`, any existing function will be removed. The function can optionally accept a single argument, which will be a table containing boolean values indicating which keyboard modifiers were held down when the menubar item was clicked; The possible keys are:
+///  * `fn` - An optional function to be called when the menubar item is clicked. If this argument is not provided, any existing function will be removed. The function can optionally accept a single argument, which will be a table containing boolean values indicating which keyboard modifiers were held down when the menubar item was clicked; The possible keys are:
 ///   * cmd
 ///   * alt
 ///   * shift
@@ -681,21 +714,23 @@ static int menubarSetTooltip(lua_State *L) {
 ///  * If a menu has been attached to the menubar item, this callback will never be called
 ///  * Has no affect on the display of a pop-up menu, but changes will be be in effect if hs.menubar:returnToMenuBar() is called on the menubaritem.
 static int menubarSetClickCallback(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
+    [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TFUNCTION|LS_TNIL|LS_TOPTIONAL, LS_TBREAK];
 
     menubaritem_t *menuBarItem = get_item_arg(L, 1);
     NSStatusItem *statusItem = (__bridge NSStatusItem*)menuBarItem->menuBarItemObject;
-    if (lua_isnil(L, 2)) {
-        menuBarItem->click_fn = [skin luaUnref:refTable ref:menuBarItem->click_fn];
-        if (menuBarItem->click_callback) {
-            [statusItem setTarget:nil];
-            [statusItem setAction:nil];
-            HSMenubarItemClickDelegate *object = (__bridge_transfer HSMenubarItemClickDelegate *)menuBarItem->click_callback;
-            menuBarItem->click_callback = nil;
-            object = nil;
-        }
-    } else {
-        luaL_checktype(L, 2, LUA_TFUNCTION);
+
+    // Remove any existing click callback
+    menuBarItem->click_fn = [skin luaUnref:refTable ref:menuBarItem->click_fn];
+    if (menuBarItem->click_callback) {
+        [statusItem setTarget:nil];
+        [statusItem setAction:nil];
+        HSMenubarItemClickDelegate *object = (__bridge_transfer HSMenubarItemClickDelegate *)menuBarItem->click_callback;
+        menuBarItem->click_callback = NULL;
+        object = nil;
+    }
+
+    if (lua_isfunction(L, 2)) {
         lua_pushvalue(L, 2);
         menuBarItem->click_fn = [skin luaRef:refTable];
         HSMenubarItemClickDelegate *object = [[HSMenubarItemClickDelegate alloc] init];
@@ -762,7 +797,7 @@ static int menubarSetClickCallback(lua_State *L) {
 /// Notes:
 ///  * If you are using the callback function, you should take care not to take too long to generate the menu, as you will block the process and the OS may decide to remove the menubar item
 static int menubarSetMenu(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
 
     menubaritem_t *menuBarItem = get_item_arg(L, 1);
     NSStatusItem *statusItem = (__bridge NSStatusItem*)menuBarItem->menuBarItemObject;
@@ -844,33 +879,49 @@ static int menubar_delete(lua_State *L) {
         menuBarItem->removed = YES;
     }
 
-    menuBarItem->menuBarItemObject = nil;
+    menuBarItem->menuBarItemObject = NULL;
     menuBarItem = nil;
 
     return 0;
 }
 
-/// hs.menubar:popupMenu(point) -> menubaritem
+/// hs.menubar:popupMenu(point[, darkMode]) -> menubaritem
 /// Method
 /// Display a menubaritem as a pop up menu at the specified screen point.
 ///
 /// Parameters:
-///  * point -- the location of the upper left corner of the pop-up menu to be displayed.
+///  * point - the location of the upper left corner of the pop-up menu to be displayed.
+///  * darkMode - (optional) `true` to force the menubar dark (defaults to your macOS General Appearance settings)
 ///
 /// Returns:
 ///  * The menubaritem
 ///
 /// Notes:
 ///  * Items which trigger hs.menubar:setClickCallback() will invoke the callback function, but we cannot control the positioning of any visual elements the function may create -- calling this method on such an object is the equivalent of invoking its callback function directly.
-///
-///  * This method is blocking -- Hammerspoon will be unable to respond to any other activity while the pop-up menu is being displayed.
+///  * This method is blocking. Hammerspoon will be unable to respond to any other activity while the pop-up menu is being displayed.
+///  * `darkMode` uses an undocumented macOS API call, so may break in a future release.
 static int menubar_render(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     menubaritem_t *menuBarItem = get_item_arg(L, 1);
     NSStatusItem  *statusItem  = (__bridge NSStatusItem*)menuBarItem->menuBarItemObject;
     NSMenu        *menu        = [statusItem menu];
 
     NSPoint menuPoint ;
+
+	// Support darkMode for popup menus:
+	BOOL darkMode = false ;
+    if (lua_gettop(L) > 2) {
+        if ((lua_type(L, 3) == LUA_TBOOLEAN) || (lua_type(L, 3) == LUA_TNIL)) {
+            if (lua_type(L, 3) == LUA_TBOOLEAN) {
+                darkMode = (BOOL)lua_toboolean(L, 3) ;
+            } else {
+                NSString *ifStyle = [[NSUserDefaults standardUserDefaults] stringForKey:@"AppleInterfaceStyle"] ;
+                darkMode = (ifStyle && [ifStyle isEqualToString:@"Dark"]) ;
+            }
+            lua_remove(L, 3) ;
+        }
+    }
+    NSAppearance *appearance = [NSAppearance appearanceNamed:(darkMode ? NSAppearanceNameVibrantDark : NSAppearanceNameVibrantLight)] ;
 
     switch (lua_type(L, 2)) {
         case LUA_TTABLE:
@@ -892,9 +943,9 @@ static int menubar_render(lua_State *L) {
     if (!menu) {
 
         if (menuBarItem->click_callback)
-            [((__bridge HSMenubarItemClickDelegate *)menuBarItem->click_callback) click:0] ;
+            [((__bridge HSMenubarItemClickDelegate *)menuBarItem->click_callback) click:NULL] ;
         else {
-            [[LuaSkin shared] logWarn:@"hs.menubar:popupMenu() Missing menu object"] ;
+            [skin logWarn:@"hs.menubar:popupMenu() Missing menu object"] ;
 
 //     // Used for testing, but inconsistent with the rest of hs.menubar's behavior for empty menus.
 //             menu = [[NSMenu alloc] init];
@@ -910,7 +961,8 @@ static int menubar_render(lua_State *L) {
     }
 
     menuPoint.y = [[NSScreen screens][0] frame].size.height - menuPoint.y ;
-    [menu popUpMenuPositioningItem:nil atLocation:menuPoint inView:nil] ;
+
+    [menu popUpMenuPositioningItem:nil atLocation:menuPoint inView:nil appearance:appearance ] ;
 
     lua_settop(L, 1) ;
     return 1 ;
@@ -930,9 +982,18 @@ static int menubar_removeFromMenuBar(lua_State *L) {
 
     if (!menuBarItem->removed) {
         NSStatusBar   *statusBar   = [NSStatusBar systemStatusBar];
-        NSStatusItem  *statusItem  = (__bridge NSStatusItem*)menuBarItem->menuBarItemObject;
+        NSStatusItem  *oldStatusItem  = (__bridge_transfer NSStatusItem*)menuBarItem->menuBarItemObject;
+        NSStatusItem  *newStatusItem = [[NSStatusItem alloc] init] ;
 
-        [statusBar removeStatusItem:statusItem];
+        menuBarItem->menuBarItemObject = (__bridge_retained void*)newStatusItem;
+        [newStatusItem  setTarget:[oldStatusItem target]] ;
+        [newStatusItem  setAction:[oldStatusItem action]] ;
+        [newStatusItem    setMenu:[oldStatusItem menu]] ;
+        [newStatusItem   setTitle:[oldStatusItem title]] ;
+        [newStatusItem   setImage:[oldStatusItem image]] ;
+        [newStatusItem setToolTip:[oldStatusItem toolTip]] ;
+
+        [statusBar removeStatusItem:oldStatusItem];
         menuBarItem->removed = YES ;
     }
 
@@ -997,7 +1058,7 @@ static int menubar_isInMenubar(lua_State *L) {
 /// Returns:
 ///  * the menubar item title, or an empty string, if there isn't one.  If `styled` is not set or is false, then a string is returned; otherwise a styledtextObject will be returned.
 static int menubarGetTitle(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBOOLEAN | LS_TOPTIONAL, LS_TBREAK] ;
     menubaritem_t *menuBarItem     = get_item_arg(L, 1);
 
@@ -1022,9 +1083,9 @@ static int menubarGetTitle(lua_State *L) {
 /// Notes:
 ///  * Default priority levels can be found in the [hs.menubar.priorities](#priorities) table.
 ///
-///  * This method uses undocumented methods in the NSStatusBar and NSStatusItem classes; because of this, we cannot guarantee that this method will work with future versions of OS X.  This method has been written so that if the necessary private methods are not present, then a warning will be sent to the Hammerspoon console and no change will occur with respect to the menubar item's priority.
+///  * This method uses undocumented methods in the NSStatusBar and NSStatusItem classes, which appear to have been removed in macOS 10.15 (Catalina), so this method will no longer work correctly.
 static int menubarPriority(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG,
                     LS_TNUMBER | LS_TINTEGER | LS_TOPTIONAL,
                     LS_TBREAK] ;
@@ -1055,10 +1116,12 @@ static int menubarGetIcon(lua_State *L) {
 
     NSImage* theImage = [(__bridge NSStatusItem*)menuBarItem->menuBarItemObject image] ;
 
-    if (theImage)
-        [[LuaSkin shared] pushNSObject:theImage];
-    else
+    if (theImage) {
+        LuaSkin *skin = [LuaSkin sharedWithState:L] ;
+        [skin pushNSObject:theImage];
+    } else {
         lua_pushnil(L) ;
+    }
 
     return 1 ;
 }
@@ -1066,10 +1129,13 @@ static int menubarGetIcon(lua_State *L) {
 static int menubarFrame(lua_State *L) {
     menubaritem_t *menuBarItem = get_item_arg(L, 1);
     NSStatusItem *statusItem = (__bridge NSStatusItem*)menuBarItem->menuBarItemObject;
-    NSRect frame = [[statusItem valueForKey:@"window"] frame];
-
-    geom_pushrect(L, frame);
-
+    NSWindow *statusBarWindow = [statusItem valueForKey:@"window"] ;
+    if (statusBarWindow && [statusBarWindow isKindOfClass:[NSWindow class]]) {
+        NSRect frame = [statusBarWindow frame];
+        geom_pushrect(L, frame);
+    } else {
+        lua_pushnil(L) ;
+    }
     return 1;
 }
 
@@ -1087,7 +1153,7 @@ static int menubarFrame(lua_State *L) {
 ///  * An image is used rather than a checkmark or dash only when you set them with the `onStateImage`, `offStateImage`, or `mixedStateImage` keys.  If you are not using these keys, then this method will have no visible effect on the menu's rendering.  See  [hs.menubar:setMenu](#setMenu) for more information.
 ///  * If you are setting the menu contents with a static table, you should invoke this method before invoking [hs.menubar:setMenu](#setMenu), as changes will only go into effect when the table is next converted to a menu structure.
 static int menubarStateImageSize(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TTABLE | LS_TNIL | LS_TOPTIONAL, LS_TBREAK] ;
     menubaritem_t *menuBarItem = get_item_arg(L, 1);
     NSStatusItem *statusItem = (__bridge NSStatusItem*)menuBarItem->menuBarItemObject;
@@ -1181,6 +1247,7 @@ static const luaL_Reg menubar_metalib[] = {
     {"_frame",            menubarFrame},
     {"priority",          menubarPriority},
     {"isInMenubar",       menubar_isInMenubar},
+    {"isInMenuBar",       menubar_isInMenubar},
 
     {"__tostring",        userdata_tostring},
     {"__gc",              menubaritem_gc},
@@ -1196,8 +1263,8 @@ static const luaL_Reg menubar_gclib[] = {
 /* NOTE: The substring "hs_menubar_internal" in the following function's name
          must match the require-path of this file, i.e. "hs.menubar.internal". */
 
-int luaopen_hs_menubar_internal(lua_State *L __unused) {
-    LuaSkin *skin = [LuaSkin shared];
+int luaopen_hs_menubar_internal(lua_State *L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
 
     menubar_setup();
 

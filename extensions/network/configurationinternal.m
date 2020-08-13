@@ -20,11 +20,12 @@ typedef struct _dynamicstore_t {
 
 static void doDynamicStoreCallback(__unused SCDynamicStoreRef store, CFArrayRef changedKeys, void *info) {
     dynamicstore_t *thePtr = (dynamicstore_t *)info ;
-    if (thePtr->callbackRef != LUA_NOREF) {
-        NSArray *nsChangedKeys = [(__bridge NSArray *)changedKeys copy];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            LuaSkin   *skin = [LuaSkin shared] ;
+    NSArray *nsChangedKeys = [(__bridge NSArray *)changedKeys copy];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if ((thePtr->callbackRef != LUA_NOREF) && (thePtr->selfRef != LUA_NOREF)) {
+            LuaSkin   *skin = [LuaSkin sharedWithState:NULL] ;
             lua_State *L    = [skin L] ;
+            _lua_stackguard_entry(L);
             [skin pushLuaRef:refTable ref:thePtr->callbackRef] ;
             [skin pushLuaRef:refTable ref:thePtr->selfRef] ;
             if (changedKeys) {
@@ -32,14 +33,10 @@ static void doDynamicStoreCallback(__unused SCDynamicStoreRef store, CFArrayRef 
             } else {
                 lua_pushnil(L) ;
             }
-            if (![skin protectedCallAndTraceback:2 nresults:0]) {
-                [skin logError:[NSString stringWithFormat:@"%s:error in Lua callback:%@",
-                                                            USERDATA_TAG,
-                                                            [skin toNSObjectAtIndex:-1]]] ;
-                lua_pop(L, 1) ; // error string from pcall
-            }
-        }) ;
-    }
+            [skin protectedCallAndError:@"hs.network.configuration callback" nargs:2 nresults:0];
+            _lua_stackguard_exit(L);
+        }
+    }) ;
 }
 
 #pragma mark - Module Functions
@@ -54,7 +51,7 @@ static void doDynamicStoreCallback(__unused SCDynamicStoreRef store, CFArrayRef 
 /// Returns:
 ///  * the storeObject
 static int newStoreObject(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TBREAK] ;
     NSString *theName = [[NSUUID UUID] UUIDString] ;
     dynamicstore_t *thePtr = lua_newuserdata(L, sizeof(dynamicstore_t)) ;
@@ -95,7 +92,7 @@ static int newStoreObject(lua_State *L) {
 /// Notes:
 ///  * if no parameters are provided, then all key-value pairs in the dynamic store are returned.
 static int dynamicStoreContents(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG,
                     LS_TSTRING | LS_TTABLE | LS_TOPTIONAL,
                     LS_TBOOLEAN | LS_TOPTIONAL,
@@ -141,7 +138,7 @@ static int dynamicStoreContents(lua_State *L) {
 /// Returns:
 ///  * a table of keys from the dynamic store.
 static int dynamicStoreKeys(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING | LS_TOPTIONAL, LS_TBREAK] ;
     SCDynamicStoreRef theStore = get_structFromUserdata(dynamicstore_t, L, 1)->storeObject ;
 
@@ -170,7 +167,7 @@ static int dynamicStoreKeys(lua_State *L) {
 ///  * a list of possible Service ID's can be retrieved with `hs.network.configuration:contents("Setup:/Network/Global/IPv4")`
 ///  * generates an error if the service ID is invalid or was not assigned an IP address via DHCP.
 static int dynamicStoreDHCPInfo(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING | LS_TOPTIONAL, LS_TBREAK] ;
     SCDynamicStoreRef theStore = get_structFromUserdata(dynamicstore_t, L, 1)->storeObject ;
 
@@ -203,7 +200,7 @@ static int dynamicStoreDHCPInfo(lua_State *L) {
 /// Notes:
 ///  * You can also retrieve this information as key-value pairs with `hs.network.configuration:contents("Setup:/System")`
 static int dynamicStoreComputerName(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK] ;
     SCDynamicStoreRef theStore = get_structFromUserdata(dynamicstore_t, L, 1)->storeObject ;
 
@@ -255,7 +252,7 @@ static int dynamicStoreComputerName(lua_State *L) {
 /// Notes:
 ///  * You can also retrieve this information as key-value pairs with `hs.network.configuration:contents("State:/Users/ConsoleUser")`
 static int dynamicStoreConsoleUser(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK] ;
     SCDynamicStoreRef theStore = get_structFromUserdata(dynamicstore_t, L, 1)->storeObject ;
 
@@ -286,7 +283,7 @@ static int dynamicStoreConsoleUser(lua_State *L) {
 /// Notes:
 ///  * You can also retrieve this information as key-value pairs with `hs.network.configuration:contents("Setup:/System")`
 static int dynamicStoreLocalHostName(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK] ;
     SCDynamicStoreRef theStore = get_structFromUserdata(dynamicstore_t, L, 1)->storeObject ;
 
@@ -321,9 +318,9 @@ SCPreferencesCreateWithOptions      (
 /// Returns:
 ///  * bool - true if the location was successfully changed, false if there was an error
 static int dynamicStoreSetLocation(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING, LS_TBREAK];
-    
+
     NSString *target ;
     if (lua_gettop(L) == 2) {
         target = [skin toNSObjectAtIndex:2];
@@ -372,7 +369,7 @@ static int dynamicStoreSetLocation(lua_State *L) {
 
     for (i=0; i<c; i++) {
         SCNetworkSetRef item = CFArrayGetValueAtIndex(locations, i);
-        
+
         CFStringRef name = SCNetworkSetGetName((SCNetworkSetRef)item);
         CFStringRef uuid = SCNetworkSetGetSetID((SCNetworkSetRef)item);
         if ((CFStringCompare(name, (CFStringRef)target, 0) == kCFCompareEqualTo) || (CFStringCompare(uuid,(CFStringRef)target, 0) == kCFCompareEqualTo)) {
@@ -406,7 +403,7 @@ static int dynamicStoreSetLocation(lua_State *L) {
 ///  * You can also retrieve this information as key-value pairs with `hs.network.configuration:contents("Setup:")`
 ///  * If you have different locations defined in the Network preferences panel, this can be used to determine the currently active location.
 static int dynamicStoreLocation(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK] ;
     SCDynamicStoreRef theStore = get_structFromUserdata(dynamicstore_t, L, 1)->storeObject ;
 
@@ -431,7 +428,7 @@ static int dynamicStoreLocation(lua_State *L) {
 ///  * a table of key-value pairs mapping location UUIDs to their names
 ///
 static int dynamicStoreLocations(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK] ;
     SCPreferencesRef prefs = SCPreferencesCreate(NULL, CFSTR("Hammerspoon"), NULL);
 
@@ -469,7 +466,7 @@ static int dynamicStoreLocations(lua_State *L) {
 /// Notes:
 ///  * You can also retrieve this information as key-value pairs with `hs.network.configuration:contents("State:/Network/Global/Proxies")`
 static int dynamicStoreProxies(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK] ;
     SCDynamicStoreRef theStore = get_structFromUserdata(dynamicstore_t, L, 1)->storeObject ;
 
@@ -497,7 +494,7 @@ static int dynamicStoreProxies(lua_State *L) {
 ///  * The callback function will be invoked each time a monitored key changes value and the callback function should accept two parameters: the storeObject itself, and an array of the keys which contain values that have changed.
 ///  * This method just sets the callback function.  You specify which keys to watch with [hs.network.configuration:monitorKeys](#monitorKeys) and start or stop the watcher with [hs.network.configuration:start](#start) or [hs.network.configuartion:stop](#stop)
 static int dynamicStoreSetCallback(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TFUNCTION | LS_TNIL, LS_TBREAK];
     dynamicstore_t* thePtr = get_structFromUserdata(dynamicstore_t, L, 1) ;
 
@@ -531,7 +528,7 @@ static int dynamicStoreSetCallback(lua_State *L) {
 /// Notes:
 ///  * The callback function should be specified with [hs.network.configuration:setCallback](#setCallback) and the keys to monitor should be specified with [hs.network.configuration:monitorKeys](#monitorKeys).
 static int dynamicStoreStartWatcher(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     dynamicstore_t* thePtr = get_structFromUserdata(dynamicstore_t, L, 1) ;
     if (!thePtr->watcherEnabled) {
@@ -555,7 +552,7 @@ static int dynamicStoreStartWatcher(lua_State *L) {
 /// Returns:
 ///  * the store object
 static int dynamicStoreStopWatcher(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     dynamicstore_t* thePtr = get_structFromUserdata(dynamicstore_t, L, 1) ;
     if (!SCDynamicStoreSetDispatchQueue(thePtr->storeObject, NULL)) {
@@ -581,7 +578,7 @@ static int dynamicStoreStopWatcher(lua_State *L) {
 /// Notes:
 ///  * if no parameters are provided, then all key-value pairs in the dynamic store are monitored for changes.
 static int dynamicStoreMonitorKeys(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG,
                     LS_TSTRING | LS_TTABLE | LS_TOPTIONAL,
                     LS_TBOOLEAN | LS_TOPTIONAL,
@@ -621,7 +618,7 @@ static int dynamicStoreMonitorKeys(lua_State *L) {
 #pragma mark - Hammerspoon/Lua Infrastructure
 
 static int userdata_tostring(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
 //     SCDynamicStoreRef theStore = get_structFromUserdata(dynamicstore_t, L, 1)->storeObject ;
     [skin pushNSObject:[NSString stringWithFormat:@"%s: (%p)", USERDATA_TAG, lua_topointer(L, 1)]] ;
     return 1 ;
@@ -641,7 +638,7 @@ static int userdata_eq(lua_State* L) {
 }
 
 static int userdata_gc(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
 //     [skin logDebug:@"dynamicstore GC"] ;
     dynamicstore_t* thePtr = get_structFromUserdata(dynamicstore_t, L, 1) ;
     if (thePtr->callbackRef != LUA_NOREF) {
@@ -699,8 +696,8 @@ static const luaL_Reg module_metaLib[] = {
     {NULL,   NULL}
 };
 
-int luaopen_hs_network_configurationinternal(lua_State* __unused L) {
-    LuaSkin *skin = [LuaSkin shared] ;
+int luaopen_hs_network_configurationinternal(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L] ;
 // Use this some of your functions return or act on a specific object unique to this module
     refTable = [skin registerLibraryWithObject:USERDATA_TAG
                                      functions:moduleLib

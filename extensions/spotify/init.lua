@@ -99,6 +99,19 @@ function spotify.previous()
   tell('previous track')
 end
 
+--- hs.spotify.playTrack(id)
+--- Function
+--- Plays the Spotify track with the given id
+---
+--- Parameters:
+---  * id - The Spotify id of the track to be played
+---
+--- Returns:
+---  * None
+function spotify.playTrack(i)
+  tell('play track "'..i..'"')
+end
+
 --- hs.spotify.displayCurrentTrack()
 --- Function
 --- Displays information for current track on screen
@@ -153,6 +166,18 @@ end
 function spotify.getCurrentTrack()
   return tell('name of the current track')
 end
+--- hs.spotify.getCurrentTrackId()
+--- Function
+--- Gets the id of the current track
+---
+--- Parameters:
+---  * None
+---
+--- Returns:
+---  * A string containing the id of the current track, or nil if an error occurred
+function spotify.getCurrentTrackId()
+  return tell('id of current track')
+end
 
 --- hs.spotify.getPlaybackState()
 --- Function
@@ -194,13 +219,13 @@ end
 ---  * A boolean value indicating whether Spotify is currently playing a track, or nil if an error occurred (unknown player state). Also returns false if the application is not running
 function spotify.isPlaying()
   -- We check separately to avoid starting the application if it's not running
-  if not hs.spotify.isRunning() then
+  if not spotify.isRunning() then
     return false
   end
-  state = hs.spotify.getPlaybackState()
-  if state == hs.spotify.state_playing then
+  local state = spotify.getPlaybackState()
+  if state == spotify.state_playing then
     return true
-  elseif state == hs.spotify.state_paused or state == hs.spotify.state_stopped then
+  elseif state == spotify.state_paused or state == spotify.state_stopped then
     return false
   else  -- unknown state
     return nil
@@ -306,7 +331,7 @@ end
 ---  * None
 function spotify.ff() return spotify.setPosition(spotify.getPosition()+5) end
 
---- hs.spotify.rw
+--- hs.spotify.rw()
 --- Function
 --- Skips the playback position backwards by 5 seconds
 ---

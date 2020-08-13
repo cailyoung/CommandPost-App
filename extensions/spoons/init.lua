@@ -1,14 +1,24 @@
-local module={}
-
 --- === hs.spoons ===
 ---
 --- Utility and management functions for Spoons
 --- Spoons are Lua plugins for Hammerspoon.
 --- See http://www.hammerspoon.org/Spoons/ for more information
 
+if _G["spoon"] == nil then
+  _G["spoon"] = {}
+end
+
+local module={}
 module._keys = {}
 
-local log = hs.logger.new("spoons")
+local fs = require("hs.fs")
+local hotkey = require("hs.hotkey")
+local logger = require("hs.logger")
+local inspect = require("hs.inspect")
+
+local log = logger.new("spoons")
+
+local configdir = hs.configdir
 
 -- --------------------------------------------------------------------
 -- Some internal utility functions
@@ -27,8 +37,8 @@ local function slurp(path)
    return s
 end
 
---- hs.spoons.newSpoon(name, basedir, metadata)
---- Method
+--- hs.spoons.newSpoon(name, basedir, metadata) -> string | nil
+--- Function
 --- Create a skeleton for a new Spoon
 ---
 --- Parameters:
@@ -51,7 +61,7 @@ end
 function module.newSpoon(name, basedir, metadata, template)
    -- Default value for basedir
    if basedir == nil or basedir == "" then
-      basedir = hs.configdir .. "/Spoons/"
+      basedir = configdir .. "/Spoons/"
    end
    -- Ensure basedir ends with a slash
    if not string.find(basedir, "/$") then
@@ -71,10 +81,10 @@ function module.newSpoon(name, basedir, metadata, template)
    meta["name"]=name
 
    local dirname = basedir .. name .. ".spoon"
-   if hs.fs.mkdir(dirname) then
+   if fs.mkdir(dirname) then
       local f=assert(io.open(dirname .. "/init.lua", "w"))
-      local template_file = template or module.resource_path("templates/init.tpl")
-      local text=slurp(template_file)
+      local templateFile = template or module.resourcePath("templates/init.tpl")
+      local text=slurp(templateFile)
       f:write(interp(text, meta))
       f:close()
       return dirname
@@ -82,23 +92,23 @@ function module.newSpoon(name, basedir, metadata, template)
    return nil
 end
 
---- hs.spoons.script_path()
---- Method
+--- hs.spoons.scriptPath([n]) -> string
+--- Function
 --- Return path of the current spoon.
 ---
 --- Parameters:
----  * n - (optional) stack level for which to get the path. Defaults to 2, which will return the path of the spoon which called `script_path()`
+---  * n - (optional) stack level for which to get the path. Defaults to 2, which will return the path of the spoon which called `scriptPath()`
 ---
 --- Returns:
 ---  * String with the path from where the calling code was loaded.
-function module.script_path(n)
+function module.scriptPath(n)
    if n == nil then n = 2 end
    local str = debug.getinfo(n, "S").source:sub(2)
    return str:match("(.*/)")
 end
 
---- hs.spoons.resource_path(partial)
---- Method
+--- hs.spoons.resourcePath(partial) -> string
+--- Function
 --- Return full path of an object within a spoon directory, given its partial path.
 ---
 --- Parameters:
@@ -106,69 +116,71 @@ end
 ---
 --- Returns:
 ---  * Absolute path of the file. Note: no existence or other checks are done on the path.
-function module.resource_path(partial)
-   return(module.script_path(3) .. partial)
+function module.resourcePath(partial)
+   return(module.scriptPath(3) .. partial)
 end
 
---- hs.spoons.bindHotkeysToSpec(def, map)
---- Method
+--- hs.spoons.bindHotkeysToSpec(def, map) -> none
+--- Function
 --- Map a number of hotkeys according to a definition table
 ---
 --- Parameters:
 ---  * def - table containing name-to-function definitions for the hotkeys supported by the Spoon. Each key is a hotkey name, and its value must be a function that will be called when the hotkey is invoked.
----  * map - table containing name-to-hotkey definitions, as supported by [bindHotkeys in the Spoon API](https://github.com/Hammerspoon/hammerspoon/blob/master/SPOONS.md#hotkeys). Not all the entries in `def` must be bound, but if any keys in `map` don't have a definition, an error will be produced.
+---  * map - table containing name-to-hotkey definitions and an optional message to be displayed via `hs.alert()` when the hotkey has been triggered, as supported by [bindHotkeys in the Spoon API](https://github.com/Hammerspoon/hammerspoon/blob/master/SPOONS.md#hotkeys). Not all the entries in `def` must be bound, but if any keys in `map` don't have a definition, an error will be produced.
 ---
 --- Returns:
 ---  * None
 function module.bindHotkeysToSpec(def,map)
-   local spoonpath = module.script_path(3)
+   local spoonpath = module.scriptPath(3)
    for name,key in pairs(map) do
       if def[name] ~= nil then
          local keypath = spoonpath .. name
          if module._keys[keypath] then
             module._keys[keypath]:delete()
          end
-         module._keys[keypath]=hs.hotkey.bindSpec(key, def[name])
+         module._keys[keypath]=hotkey.bindSpec(key, key["message"], def[name])
       else
          log.ef("Error: Hotkey requested for undefined action '%s'", name)
       end
    end
 end
 
---- hs.spoons.list()
---- Method
+--- hs.spoons.list() -> table
+--- Function
 --- Return a list of installed/loaded Spoons
 ---
 --- Parameters:
----  * only_loaded - only return loaded Spoons (skips those that are installed but not loaded). Defaults to `false`
+---  * onlyLoaded - only return loaded Spoons (skips those that are installed but not loaded). Defaults to `false`
 ---
 --- Returns:
----  * Table with a list of installed/loaded spoons (depending on the value of `only_loaded`). Each entry is a table with the following entries:
+---  * Table with a list of installed/loaded spoons (depending on the value of `onlyLoaded`). Each entry is a table with the following entries:
 ---    * `name` - Spoon name
 ---    * `loaded` - boolean indication of whether the Spoon is loaded (`true`) or only installed (`false`)
 ---    * `version` - Spoon version number. Available only for loaded Spoons.
-function module.list(only_loaded)
-   local iterfn, dirobj = hs.fs.dir(hs.configdir .. "/Spoons")
+function module.list(onlyLoaded)
+   local _, dirobj = fs.dir(configdir .. "/Spoons")
    local res = {}
-   repeat
-      local f = dirobj:next()
-      if f then
-         if string.match(f, ".spoon$") then
-            local s = f:gsub(".spoon$", "")
-            local l = (spoon[s] ~= nil)
-            if (not only_loaded) or l then
-               local new = { name = s, loaded = l }
-               if l then new.version = spoon[s].version end
-               table.insert(res, new)
-            end
-         end
-      end
-   until f == nil
-   return res
+   if dirobj then
+       repeat
+          local f = dirobj:next()
+          if f then
+             if string.match(f, ".spoon$") then
+                local s = f:gsub(".spoon$", "")
+                local l = (spoon[s] ~= nil)
+                if (not onlyLoaded) or l then
+                   local new = { name = s, loaded = l }
+                   if l then new.version = spoon[s].version end
+                   table.insert(res, new)
+                end
+             end
+          end
+       until f == nil
+    end
+    return res
 end
 
---- hs.spoons.isInstalled(name)
---- Method
+--- hs.spoons.isInstalled(name) -> table | nil
+--- Function
 --- Check if a given Spoon is installed.
 ---
 --- Parameters:
@@ -178,7 +190,7 @@ end
 ---  * If the Spoon is installed, it returns a table with the Spoon information as returned by `list()`. Returns `nil` if the Spoon is not installed.
 function module.isInstalled(name)
    local list = module.list()
-   for i,v in ipairs(list) do
+   for _,v in ipairs(list) do
       if v.name == name then
          return v
       end
@@ -186,8 +198,8 @@ function module.isInstalled(name)
    return nil
 end
 
---- hs.spoons.isLoaded(name)
---- Method
+--- hs.spoons.isLoaded(name) -> boolean | nil
+--- Function
 --- Check if a given Spoon is loaded.
 ---
 --- Parameters:
@@ -197,7 +209,7 @@ end
 ---  * `true` if the Spoon is loaded, `nil` otherwise.
 function module.isLoaded(name)
    local list = module.list()
-   for i,v in ipairs(list) do
+   for _,v in ipairs(list) do
       if v.name == name then
          return v.loaded
       end
@@ -205,8 +217,8 @@ function module.isLoaded(name)
    return nil
 end
 
---- hs.spoons.use(name, arg)
---- Method
+--- hs.spoons.use(name, arg) -> boolean | nil
+--- Function
 --- Declaratively load and configure a Spoon
 ---
 --- Parameters:
@@ -222,9 +234,9 @@ end
 --- Returns:
 ---  * `true` if the spoon was loaded, `nil` otherwise
 function module.use(name, arg, noerror)
-   log.df("hs.spoons.use(%s, %s)", name, hs.inspect(arg))
+   log.df("hs.spoons.use(%s, %s)", name, inspect(arg))
    if not arg then arg = {} end
-   if hs.spoons.isInstalled(name) then
+   if module.isInstalled(name) then
       local spn=hs.loadSpoon(name)
       if spn then
          if arg.loglevel and spn.logger then
@@ -232,7 +244,7 @@ function module.use(name, arg, noerror)
          end
          if arg.config then
             for k,v in pairs(arg.config) do
-               log.df("Setting config: spoon.%s.%s = %s", name, k, hs.inspect(v))
+               log.df("Setting config: spoon.%s.%s = %s", name, k, inspect(v))
                spn[k] = v
             end
          end
@@ -246,12 +258,12 @@ function module.use(name, arg, noerror)
                end
             end
             if type(mapping) == 'table' then
-               log.df("Binding hotkeys: spoon.%s:bindHotkeys(%s)", name, hs.inspect(arg.hotkeys))
+               log.df("Binding hotkeys: spoon.%s:bindHotkeys(%s)", name, inspect(arg.hotkeys))
                spn:bindHotkeys(mapping)
             end
          end
          if arg.fn then
-            log.df("Calling configuration function %s", hs.inspect(arg.fn))
+            log.df("Calling configuration function %s", inspect(arg.fn))
             arg.fn(spn)
          end
          if arg.start then

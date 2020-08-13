@@ -3,6 +3,32 @@
 --- Inspect/manipulate the position of the mouse pointer
 ---
 --- This module is based primarily on code from the previous incarnation of Mjolnir by [Steven Degutis](https://github.com/sdegutis/).
+---
+--- This module uses ManyMouse by Ryan C. Gordon.
+---
+--- MANYMOUSE LICENSE:
+---
+--- Copyright (c) 2005-2012 Ryan C. Gordon and others.
+---
+--- This software is provided 'as-is', without any express or implied warranty.
+--- In no event will the authors be held liable for any damages arising from
+--- the use of this software.
+---
+--- Permission is granted to anyone to use this software for any purpose,
+--- including commercial applications, and to alter it and redistribute it
+--- freely, subject to the following restrictions:
+---
+--- 1. The origin of this software must not be misrepresented; you must not
+--- claim that you wrote the original software. If you use this software in a
+--- product, an acknowledgment in the product documentation would be
+--- appreciated but is not required.
+---
+--- 2. Altered source versions must be plainly marked as such, and must not be
+--- misrepresented as being the original software.
+---
+--- 3. This notice may not be removed or altered from any source distribution.
+---
+---     Ryan C. Gordon <icculus@icculus.org>
 
 local module = require("hs.mouse.internal")
 local fnutils = require("hs.fnutils")
@@ -48,12 +74,12 @@ end
 --- Notes:
 ---  * The co-ordinates returned by this function are relative to the top left pixel of the screen the mouse is on (see `hs.mouse.getAbsolutePosition` if you need the location in the full desktop space)
 function module.getRelativePosition()
-    local screen = module.getCurrentScreen()
-    if screen == nil then
+    local currentScreen = module.getCurrentScreen()
+    if currentScreen == nil then
         return nil
     end
 
-    local frame = screen:fullFrame()
+    local frame = currentScreen:fullFrame()
     local point = module.getAbsolutePosition()
     local rel = {}
 
@@ -73,16 +99,16 @@ end
 ---
 --- Returns:
 ---  * None
-function module.setRelativePosition(point, screen)
-    if screen == nil then
-        screen = module.getCurrentScreen()
-        if screen == nil then
+function module.setRelativePosition(point, currentScreen)
+    if currentScreen == nil then
+        currentScreen = module.getCurrentScreen()
+        if currentScreen == nil then
             print("ERROR: Unable to find the current screen")
             return nil
         end
     end
 
-    local frame = screen:fullFrame()
+    local frame = currentScreen:fullFrame()
     local abs = {}
 
     abs["x"] = frame["x"] + point["x"]
@@ -126,6 +152,3 @@ end
 -- Return Module Object --------------------------------------------------
 
 return module
-
-
-

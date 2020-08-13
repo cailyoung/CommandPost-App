@@ -69,7 +69,7 @@ task_userdata_t *userDataFromNSFileHandle(NSFileHandle *fh) {
 
 void (^writerBlock)(NSFileHandle *) = ^(NSFileHandle *stdInFH) {
     dispatch_sync(dispatch_get_main_queue(), ^{
-        LuaSkin *skin = [LuaSkin shared];
+        LuaSkin *skin = [LuaSkin sharedWithState:NULL];
 
         // There don't ever seem to be any circumstances where we want to be called multiple times, so let's immediately prevent ourselves being called again
         stdInFH.writeabilityHandler = nil;
@@ -118,7 +118,8 @@ void create_task(task_userdata_t *userData) {
         // Ensure this callback happens on the main thread
         dispatch_sync(dispatch_get_main_queue(), ^{
             task_userdata_t *userData = NULL;
-            LuaSkin *skin = [LuaSkin shared];
+            LuaSkin *skin = [LuaSkin sharedWithState:NULL];
+            _lua_stackguard_entry(skin.L);
 
             NSFileHandle *stdOutFH = [task.standardOutput fileHandleForReading];
             NSFileHandle *stdErrFH = [task.standardError fileHandleForReading];
@@ -141,6 +142,7 @@ void create_task(task_userdata_t *userData) {
 
             if (!userData) {
                 NSLog(@"NSTask terminationHandler called on a task we don't recognise. This was likely a stuck process, or one that didn't respond to SIGTERM, and we have already GC'd its objects. Ignoring");
+                _lua_stackguard_exit(skin.L);
                 return;
             }
 
@@ -156,14 +158,10 @@ void create_task(task_userdata_t *userData) {
                 lua_pushinteger(skin.L, task.terminationStatus);
                 [skin pushNSObject:stdOut];
                 [skin pushNSObject:stdErr];
-
-                if (![skin protectedCallAndTraceback:3 nresults:0]) {
-                    const char *errorMsg = lua_tostring([skin L], -1);
-                    [skin logError:[NSString stringWithFormat:@"hs.task callback error: %s", errorMsg]];
-                    lua_pop([skin L], 1);
-                }
+                [skin protectedCallAndError:@"hs.task callback" nargs:3 nresults:0];
             }
             userData->selfRef = [skin luaUnref:refTable ref:userData->selfRef];
+            _lua_stackguard_exit(skin.L);
         });
     };
 
@@ -181,19 +179,20 @@ void create_task(task_userdata_t *userData) {
 ///   * stdOut - A string containing the standard output of the process
 ///   * stdErr - A string containing the standard error output of the process
 ///  * streamCallbackFn - A optional callback function to be called whenever the task outputs data to stdout or stderr. The function must return a boolean value - true to continue calling the streaming callback, false to stop calling it. The function should accept three arguments:
-///   * task - The hs.task object
+///   * task - The hs.task object or nil if this is the final output of the completed task.
 ///   * stdOut - A string containing the standard output received since the last call to this callback
 ///   * stdErr - A string containing the standard error output received since the last call to this callback
-///  * arguments - An optional table containing command line arguments for the executable
+///  * arguments - An optional table of command line argument strings for the executable
 ///
 /// Returns:
 ///  * An `hs.task` object
 ///
 /// Notes:
 ///  * The arguments are not processed via a shell, so you do not need to do any quoting or escaping. They are passed to the executable exactly as provided.
+///  * When using a stream callback, the callback may be invoked one last time after the termination callback has already been invoked. In this case, the `task` argument to the stream callback will be `nil` rather than the task userdata object and the return value of the stream callback will be ignored.
 static int task_new(lua_State *L) {
     // Check our arguments
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TSTRING, LS_TFUNCTION|LS_TNIL, LS_TTABLE|LS_TFUNCTION|LS_TOPTIONAL, LS_TTABLE|LS_TOPTIONAL, LS_TBREAK];
 
     // Create our Lua userdata object
@@ -257,7 +256,7 @@ static int task_new(lua_State *L) {
 /// Returns:
 ///  * the hs.task object
 static int task_setCallback(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TFUNCTION | LS_TNIL, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
 
@@ -265,8 +264,6 @@ static int task_setCallback(lua_State *L) {
     if (lua_type(L, 2) == LUA_TFUNCTION) {
         lua_pushvalue(L, 2);
         userData->luaCallback = [skin luaRef:refTable];
-    } else {
-        userData->luaCallback = LUA_REFNIL;
     }
 
     lua_pushvalue(L, 1) ;
@@ -287,7 +284,7 @@ static int task_setCallback(lua_State *L) {
 ///  * This method can be called before the task has been started, to prepare some input for it (particularly if it is not a streaming task)
 ///  * If this method is called multiple times, any input that has not been passed to the task already, is discarded (for streaming tasks, the data is generally consumed very quickly, but for now there is no way to syncronise this)
 static int task_setInput(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING | LS_TNUMBER, LS_TBREAK];
 
     task_userdata_t *userData = lua_touserdata(L, 1);
@@ -332,7 +329,7 @@ static int task_setInput(lua_State *L) {
 ///  * This should only be called on tasks with a streaming callback - tasks without it will automatically close stdin when any data supplied via `hs.task:setInput()` has been written
 ///  * This is primarily useful for sending EOF to long-running tasks
 static int task_closeInput(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
 
     task_userdata_t *userData = lua_touserdata(L, 1);
@@ -360,7 +357,7 @@ static int task_closeInput(lua_State *L) {
 ///  * For information about the requirements of the callback function, see `hs.task.new()`
 ///  * If a callback is removed without it previously having returned false, any further stdout/stderr output from the task will be silently discarded
 static int task_setStreamingCallback(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TFUNCTION | LS_TNIL, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
 
@@ -368,8 +365,6 @@ static int task_setStreamingCallback(lua_State *L) {
     if (lua_type(L, 2) == LUA_TFUNCTION) {
         lua_pushvalue(L, 2);
         userData->luaStreamCallback = [skin luaRef:refTable];
-    } else {
-        userData->luaStreamCallback = LUA_REFNIL;
     }
 
     lua_pushvalue(L, 1);
@@ -389,7 +384,7 @@ static int task_setStreamingCallback(lua_State *L) {
 /// Notes:
 ///  * This only returns the directory that the task starts in.  If the task changes the directory itself, this value will not reflect that change.
 static int task_getWorkingDirectory(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
     NSTask *task = (__bridge NSTask *)userData->nsTask;
@@ -412,7 +407,7 @@ static int task_getWorkingDirectory(lua_State *L) {
 ///  * You can only set the working directory if the task has not already been started.
 ///  * This will only set the directory that the task starts in.  The task itself can change the directory while it is running.
 static int task_setWorkingDirectory(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
     NSTask *task = (__bridge NSTask *)userData->nsTask;
@@ -443,7 +438,7 @@ static int task_setWorkingDirectory(lua_State *L) {
 /// Notes:
 ///  * The PID will still be returned if the task has already completed and the process terminated
 static int task_getPID(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
 
@@ -464,7 +459,7 @@ static int task_getPID(lua_State *L) {
 /// Notes:
 ///  * If the task does not start successfully, the error message will be printed to the Hammerspoon Console
 static int task_launch(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
     BOOL result = false;
@@ -517,7 +512,7 @@ static int task_launch(lua_State *L) {
 /// Notes:
 ///  * This will send SIGTERM to the process
 static int task_SIGTERM(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
 
@@ -545,7 +540,7 @@ static int task_SIGTERM(lua_State *L) {
 /// Notes:
 ///  * This will send SIGINT to the process
 static int task_SIGINT(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
 
@@ -574,7 +569,7 @@ static int task_SIGINT(lua_State *L) {
 ///  * If the task is not paused, the error message will be printed to the Hammerspoon Console
 ///  * This method can be called multiple times, but a matching number of `hs.task:resume()` calls will be required to allow the process to continue
 static int task_pause(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
     BOOL result = false;
@@ -606,7 +601,7 @@ static int task_pause(lua_State *L) {
 /// Notes:
 ///  * If the task is not resumed successfully, the error message will be printed to the Hammerspoon Console
 static int task_resumeTask(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
     BOOL result = false;
@@ -638,7 +633,7 @@ static int task_resumeTask(lua_State *L) {
 /// Notes:
 ///  * All Lua and Hammerspoon activity will be blocked by this method. Its use is highly discouraged.
 static int task_block(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
 
@@ -659,7 +654,7 @@ static int task_block(lua_State *L) {
 /// Returns:
 ///  * the numeric exitCode of the task, or the boolean false if the task has not yet exited (either because it has not yet been started or because it is still running).
 static int task_terminationStatus(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
     @try {
@@ -693,7 +688,7 @@ static int task_terminationStatus(lua_State *L) {
 /// Notes:
 ///  * A task which has not yet been started yet will also return false.
 static int task_isRunning(lua_State *L) {
-    [[LuaSkin shared] checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
+    [[LuaSkin sharedWithState:L] checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
     if (!userData->hasStarted)
         lua_pushboolean(L, NO) ;
@@ -717,7 +712,7 @@ static int task_isRunning(lua_State *L) {
 /// Returns:
 ///  * a string value of "exit" if the process exited normally or "interrupt" if it was killed by a signal.  Returns false if the termination reason is unavailable (the task is still running, or has not yet been started).
 static int task_terminationReason(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
     @try {
@@ -755,7 +750,7 @@ static int task_terminationReason(lua_State *L) {
 /// Note:
 ///  * if you have not yet set an environment table with the `hs.task:setEnvironment` method, this method will return a copy of the Hammerspoon environment table, as this is what the task will inherit by default.
 static int task_getEnvironment(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
     NSTask *task = (__bridge NSTask *)userData->nsTask;
@@ -780,7 +775,7 @@ static int task_getEnvironment(lua_State *L) {
 /// Note:
 ///  * If you do not set an environment table with this method, the task will inherit the environment variables of the Hammerspoon application.  Set this to an empty table if you wish for no variables to be set for the task.
 static int task_setEnvironment(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TTABLE, LS_TBREAK];
     task_userdata_t *userData = lua_touserdata(L, 1);
     NSTask *task = (__bridge NSTask *)userData->nsTask;
@@ -798,7 +793,7 @@ static int task_setEnvironment(lua_State *L) {
 }
 
 static int task_toString(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     task_userdata_t *userData = lua_touserdata(L, 1);
 
     [skin pushNSObject:[NSString stringWithFormat:@"hs.task: %@ %@ (%p)", (__bridge NSString *)userData->launchPath, [(__bridge NSArray *)userData->arguments componentsJoinedByString:@" "], lua_topointer(L, 1)]];
@@ -806,7 +801,7 @@ static int task_toString(lua_State *L) {
 }
 
 static int task_gc(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     task_userdata_t *userData = lua_touserdata(L, 1);
     NSTask *task = (__bridge_transfer NSTask *)userData->nsTask;
     NSPointerArray *pointerArray = pointerArrayFromNSTask(task);
@@ -827,6 +822,7 @@ static int task_gc(lua_State *L) {
 
     userData->luaCallback = [skin luaUnref:refTable ref:userData->luaCallback];
     userData->selfRef = [skin luaUnref:refTable ref:userData->selfRef];
+    userData->luaStreamCallback = [skin luaUnref:refTable ref:userData->luaStreamCallback];
 
     NSString *launchPath = (__bridge_transfer NSString *)userData->launchPath;
     NSArray *arguments = (__bridge_transfer NSArray *)userData->arguments;
@@ -888,7 +884,7 @@ static const luaL_Reg taskObjectLib[] = {
 };
 
 int luaopen_hs_task_internal(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     refTable = [skin registerLibraryWithObject:USERDATA_TAG functions:taskLib metaFunctions:taskMetaLib objectFunctions:taskObjectLib];
 
     tasks = [[NSMutableArray alloc] init];
@@ -912,6 +908,9 @@ int luaopen_hs_task_internal(lua_State* L) {
         }
 
         if (userData->luaStreamCallback != LUA_NOREF && userData->luaStreamCallback != LUA_REFNIL) {
+            LuaSkin *_skin = [LuaSkin sharedWithState:NULL];
+            lua_State *_L = _skin.L;
+            _lua_stackguard_entry(_L);
             NSFileHandle *stdOutFH = [((__bridge NSTask *)userData->nsTask).standardOutput fileHandleForReading];
             NSFileHandle *stdErrFH = [((__bridge NSTask *)userData->nsTask).standardError fileHandleForReading];
 
@@ -923,36 +922,46 @@ int luaopen_hs_task_internal(lua_State* L) {
             } else if (fh == stdErrFH) {
                 stdErrArg = dataString;
             } else {
-                [skin logError:@"hs.task:setStreamingCallback() Received data from an unknown file handle"];
+                [_skin logError:@"hs.task:setStreamingCallback() Received data from an unknown file handle"];
+                _lua_stackguard_exit(_L);
                 return;
             }
 
-            [skin pushLuaRef:refTable ref:userData->luaStreamCallback];
-            [skin pushLuaRef:refTable ref:userData->selfRef];
-            [skin pushNSObject:stdOutArg];
-            [skin pushNSObject:stdErrArg];
+            BOOL notLastGasp = (userData->selfRef != LUA_NOREF && userData->selfRef != LUA_REFNIL) ;
+            [_skin pushLuaRef:refTable ref:userData->luaStreamCallback];
+            if (notLastGasp) {
+                [_skin pushLuaRef:refTable ref:userData->selfRef];
+            } else {
+                lua_pushnil(L) ;
+            }
+            [_skin pushNSObject:stdOutArg];
+            [_skin pushNSObject:stdErrArg];
 
-            if (![skin protectedCallAndTraceback:3 nresults:1]) {
-                const char *errorMsg = lua_tostring([skin L], -1);
-                [skin logError:[NSString stringWithFormat:@"hs.task:setStreamingCallback() callback error: %s", errorMsg]];
+            if (![_skin protectedCallAndTraceback:3 nresults:1]) {
+                const char *errorMsg = lua_tostring([_skin L], -1);
+                [_skin logError:[NSString stringWithFormat:@"hs.task:setStreamingCallback() callback error: %s", errorMsg]];
+                // No lua_pop() here, it's handled below
             }
 
-            if (lua_type(L, -1) != LUA_TBOOLEAN) {
-                [skin logError:@"hs.task:setStreamingCallback() callback did not return a boolean"];
+            if (lua_type(_L, -1) != LUA_TBOOLEAN) {
+                [_skin logError:@"hs.task:setStreamingCallback() callback did not return a boolean"];
             } else {
-                BOOL continueStreaming = lua_toboolean(L, -1);
+                BOOL continueStreaming = lua_toboolean(_L, -1);
 
-                if (continueStreaming) {
+                // there is nothing to stream further if this was invoked *after* the termination handler
+                // and an exception may be thrown, so let's just skip the readInBackgroundAndNotify instead...
+                if (continueStreaming && notLastGasp) {
                     @try {
                         [fh readInBackgroundAndNotify];
                     } @catch (NSException *exception) {
-                        [skin logError:[NSString stringWithFormat:@"hs.task:setStreamingCallback() post-callback background reading threw an exception. Please file a bug saying: %@", exception.description]];
+                        [_skin logError:[NSString stringWithFormat:@"hs.task:setStreamingCallback() post-callback background reading threw an exception. Please file a bug saying: %@", exception.description]];
                     } @finally {
                         ;
                     }
                 }
             }
-            lua_pop(L, 1); // result or error
+            lua_pop(_L, 1); // result or error
+            _lua_stackguard_exit(_L);
         }
 
     }];

@@ -32,7 +32,7 @@ function success()
 end
 
 function errorMsgEquality(expected, actual)
-  return string.format("expected: %s, actual: %s", expected, actual)
+  return string.format("expected: '%s', actual: '%s'", expected, actual)
 end
 
 -- Assertions
@@ -77,7 +77,7 @@ end
 
 function assertIsNotNil(a)
   if a == nil then
-    failure("expected: nil, actual: "..tostring(a))
+    failure("expected: not-nil, actual: "..tostring(a))
   end
 end
 

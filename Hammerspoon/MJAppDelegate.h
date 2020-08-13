@@ -5,7 +5,10 @@
 //  Created by Chris Jones on 02/09/2015.
 //  Copyright (c) 2015 Hammerspoon. All rights reserved.
 //
-@import Crashlytics;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wvariadic-macros"
+#import "Sentry.h"
+#pragma clang diagnostic pop
 
 @protocol HSOpenFileDelegate <NSObject>
 
@@ -13,10 +16,11 @@
 
 @end
 
-@interface MJAppDelegate : NSObject <NSApplicationDelegate, CrashlyticsDelegate>
+@interface MJAppDelegate : NSObject <NSApplicationDelegate> /* CRASHLYTICS DELEGATE WAS HERE */
 @property IBOutlet NSMenu* menuBarMenu;
 @property (nonatomic, copy) NSAppleEventDescriptor *startupEvent;
 @property (nonatomic, copy) NSString *startupFile;
 @property (nonatomic, weak) id<HSOpenFileDelegate> openFileDelegate;
 @property (nonatomic, strong) NSString* updateAvailable;
+@property (nonatomic, strong) NSString* updateAvailableDisplayVersion;
 @end

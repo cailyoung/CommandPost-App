@@ -5,18 +5,78 @@
 #import <IOKit/hidsystem/IOHIDParameter.h>
 #import <IOKit/hidsystem/IOHIDLib.h>
 
-static NSPoint hammerspoon_topoint(lua_State* L, int idx) {
-    luaL_checktype(L, idx, LUA_TTABLE);
-    CGFloat x = (lua_getfield(L, idx, "x"), luaL_checknumber(L, -1));
-    CGFloat y = (lua_getfield(L, idx, "y"), luaL_checknumber(L, -1));
-    lua_pop(L, 2);
-    return NSMakePoint(x, y);
+#include "manymouse.h"
+
+/// hs.mouse.count([includeInternal]) -> number
+/// Function
+/// Gets the total number of mice connected to your system.
+///
+/// Parameters:
+///  * includeInternal - A boolean which sets whether or not you want to include internal Trackpad's in the count. Defaults to false.
+///
+/// Returns:
+///  * The number of mice connected to your system
+///
+/// Notes:
+///  * This function leverages code from [ManyMouse](http://icculus.org/manymouse/).
+///  * This function considers any mouse labelled as "Apple Internal Keyboard / Trackpad" to be an internal mouse.
+static int mouse_count(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
+    [skin checkArgs:LS_TBOOLEAN | LS_TOPTIONAL, LS_TBREAK];
+
+    BOOL includeInternal = lua_toboolean(L, 1);
+
+    const int availableMice = ManyMouse_Init();
+
+    NSNumber *mouseCount = [NSNumber numberWithInt:availableMice];
+
+    if (includeInternal == NO) {
+        int externalCount = 0;
+        int i;
+        NSString *internalID = @"Apple Internal Keyboard / Trackpad";
+
+        for (i = 0; i < availableMice; i++) {
+            NSString *currentDevice = [NSString stringWithCString:ManyMouse_DeviceName(i) encoding:NSUTF8StringEncoding];
+            if(![internalID isEqualToString:currentDevice]) {
+                externalCount++;
+            }
+        }
+        mouseCount = [NSNumber numberWithInt:externalCount];
+    }
+
+    [skin pushNSObject:mouseCount];
+    ManyMouse_Quit();
+    return 1;
 }
 
-static void hammerspoon_pushpoint(lua_State* L, NSPoint point) {
-    lua_newtable(L);
-    lua_pushnumber(L, point.x); lua_setfield(L, -2, "x");
-    lua_pushnumber(L, point.y); lua_setfield(L, -2, "y");
+/// hs.mouse.names() -> table
+/// Function
+/// Gets the names of any mice connected to the system.
+///
+/// Parameters:
+///  * None
+///
+/// Returns:
+///  * A table containing strings of all the mice connected to the system.
+///
+/// Notes:
+///  * This function leverages code from [ManyMouse](http://icculus.org/manymouse/).
+static int mouse_names(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
+    [skin checkArgs: LS_TBREAK];
+
+    const int availableMice = ManyMouse_Init();
+
+    NSMutableArray *mice = [[NSMutableArray alloc] init];
+    int i;
+    for (i = 0; i < availableMice; i++) {
+        NSString *currentDevice = [NSString stringWithCString:ManyMouse_DeviceName(i) encoding:NSUTF8StringEncoding];
+        [mice addObject:currentDevice];
+    }
+
+    [skin pushNSObject:mice];
+    ManyMouse_Quit();
+    return 1;
 }
 
 /// hs.mouse.getAbsolutePosition() -> point
@@ -33,8 +93,11 @@ static void hammerspoon_pushpoint(lua_State* L, NSPoint point) {
 ///  * The co-ordinates returned by this function are in relation to the full size of your desktop. If you have multiple monitors, the desktop is a large virtual rectangle that contains them all (e.g. if you have two 1920x1080 monitors and the mouse is in the middle of the second monitor, the returned table would be `{ x=2879, y=540 }`)
 ///  * Multiple monitors of different sizes can cause the co-ordinates of some areas of the desktop to be negative. This is perfectly normal. 0,0 in the co-ordinates of the desktop is the top left of the primary monitor
 static int mouse_get(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
+    [skin checkArgs:LS_TBREAK];
+
     CGEventRef ourEvent = CGEventCreate(NULL);
-    hammerspoon_pushpoint(L, CGEventGetLocation(ourEvent));
+    [skin pushNSPoint:CGEventGetLocation(ourEvent)];
     CFRelease(ourEvent);
     return 1;
 }
@@ -52,12 +115,16 @@ static int mouse_get(lua_State* L) {
 /// Notes:
 ///  * The co-ordinates given to this function must be in relation to the full size of your desktop. See the notes for `hs.mouse.getAbsolutePosition` for more information
 static int mouse_set(lua_State* L) {
-    CGWarpMouseCursorPosition(hammerspoon_topoint(L, 1));
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
+    [skin checkArgs:LS_TTABLE, LS_TBREAK];
+
+    CGWarpMouseCursorPosition([skin tableToPointAtIndex:1]);
+    CGAssociateMouseAndMouseCursorPosition(YES);
     return 0;
 }
 
 static int mouseTrackpadAcceleration(lua_State *L, CFStringRef key) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TNUMBER | LS_TOPTIONAL, LS_TBREAK];
     NXEventHandle handle;
     kern_return_t result;
@@ -115,13 +182,13 @@ static int mouse_mouseAcceleration(lua_State *L) {
 /// Function
 /// Gets the system-wide direction of scolling
 ///
-/// Paramters:
+/// Parameters:
 ///  * None
 ///
 /// Returns:
 ///  * A string, either "natural" or "normal"
 static int mouse_scrollDirection(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TBREAK];
 
     NSString *scrollDirection = [[[NSUserDefaults standardUserDefaults] objectForKey:@"com.apple.swipescrolldirection"] boolValue]? @"natural" : @"normal";
@@ -137,11 +204,13 @@ static const luaL_Reg mouseLib[] = {
     {"setAbsolutePosition", mouse_set},
     {"trackingSpeed", mouse_mouseAcceleration},
     {"scrollDirection", mouse_scrollDirection},
+    {"count", mouse_count},
+    {"names", mouse_names},
     {NULL, NULL}
 };
 
-int luaopen_hs_mouse_internal(lua_State* L __unused) {
-    LuaSkin *skin = [LuaSkin shared];
+int luaopen_hs_mouse_internal(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin registerLibrary:mouseLib metaFunctions:nil];
 
     return 1;

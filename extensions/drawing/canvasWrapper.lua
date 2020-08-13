@@ -1,16 +1,3 @@
---- === hs.canvas.drawing ===
----
---- An wrapper to replace `hs.drawing` with `hs.canvas`.
----
---- The intention is for this wrapper to provide all of the same functionality that `hs.drawing` does without requiring any additional changes to your currently existing code.
----
---- ### Known issues/differences between the wrapper and `hs.drawing`:
----
----  * images which are "template images" (i.e. some of the images with names in `hs.image.systemImageNames` and any image retrieved from an `hs.menubar` object) are displayed with an implicit `imageAlpha` of 0.5.  This closely mimics the NSImageView behavior observed with `hs.drawing`, but since Apple has not provided full details on how a template image is rendered when it is *not* used as a template, this is just a guess.
----
----  * image frames from `hs.drawing` are approximated with additional canvas elements inserted into the canvas; since this module now allows you to create as complex a frame as you like... consider these as "examples".
----
---- The wrapper is not enabled by default.  See the `hs.canvas.drawingWrapper` function for details on how to enable or disable this wrapper.
 
 local USERDATA_TAG = "hs.drawing"
 
@@ -147,7 +134,6 @@ module.rectangle = function(frame)
 end
 
 module.text = function(frame, message)
-    local styledtext = require("hs.styledtext")
     if type(message) == "table" then
         message = styledtext.new(message)
     elseif type(message) ~= "string" and getmetatable(message) ~= hs.getObjectMetatable("hs.styledtext") then
@@ -296,7 +282,7 @@ drawingMT.setClickCallback = function(self, ...)
 
     self.canvas:canvasMouseEvents(mouseDnFn and true or false, mouseUpFn and true or false)
     if mouseDnFn or mouseUpFn then
-        self.canvas:mouseCallback(function(c, m, i, x, y)
+        self.canvas:mouseCallback(function(_, m)
             if     m == "mouseUp"   and mouseUpFn then mouseUpFn()
             elseif m == "mouseDown" and mouseDnFn then mouseDnFn()
             end
@@ -729,15 +715,15 @@ drawingMT.setFrame = function(self, ...)
     return self
 end
 
-drawingMT.alpha                   = function(self, ...) return self.canvas:alpha() end
+drawingMT.alpha                   = function(self) return self.canvas:alpha() end
 drawingMT.setAlpha                = function(self, ...) self.canvas:alpha(...) ; return self end
-drawingMT.behavior                = function(self, ...) return self.canvas:behavior() end
+drawingMT.behavior                = function(self) return self.canvas:behavior() end
 drawingMT.setBehavior             = function(self, ...) self.canvas:behavior(...) ; return self end
-drawingMT.behaviorAsLabels        = function(self, ...) return self.canvas:behaviorAsLabels() end
+drawingMT.behaviorAsLabels        = function(self) return self.canvas:behaviorAsLabels() end
 drawingMT.setBehaviorByLabels     = function(self, ...) self.canvas:behaviorAsLabels(...) ; return self end
 drawingMT.bringToFront            = function(self, ...) self.canvas:bringToFront(...) ; return self end
 drawingMT.clickCallbackActivating = function(self, ...) self.canvas:clickActivating(...) ; return self end
-drawingMT.frame                   = function(self, ...) return self.canvas:frame() end
+drawingMT.frame                   = function(self) return self.canvas:frame() end
 drawingMT.hide                    = function(self, ...) self.canvas:hide(...) ; return self end
 drawingMT.sendToBack              = function(self, ...) self.canvas:sendToBack(...) ; return self end
 drawingMT.setLevel                = function(self, ...) self.canvas:level(...) ; return self end

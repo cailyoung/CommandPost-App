@@ -100,8 +100,9 @@ static NSString *getVoiceShortCut(NSString *theVoice) {
 - (void)speechSynthesizer:(NSSpeechSynthesizer *)sender willSpeakWord:(NSRange)wordToSpeak
                                                              ofString:(NSString *)text {
     if (((HSSpeechSynthesizer *)sender).callbackRef != LUA_NOREF) {
-        LuaSkin      *skin    = [LuaSkin shared];
+        LuaSkin      *skin    = [LuaSkin sharedWithState:NULL];
         lua_State    *_L      = [skin L];
+        _lua_stackguard_entry(_L);
         NSDictionary *charMap = luaByteToObjCharMap(text);
 
         [skin pushLuaRef:refTable ref:((HSSpeechSynthesizer *)sender).callbackRef];
@@ -116,28 +117,23 @@ static NSString *getVoiceShortCut(NSString *theVoice) {
         lua_pushinteger(_L, (lua_Integer)[[luaEnd lastObject] unsignedIntegerValue] - 1);
 
         [skin pushNSObject:text];
-        if (![skin protectedCallAndTraceback:5 nresults:0]) {
-            NSString *theError = [skin toNSObjectAtIndex:-1];
-            lua_pop(_L, 1);
-            [skin logError:[NSString stringWithFormat:@"hs.speech.setCallback() willSpeakWord callback error: %@", theError]];
-        }
+        [skin protectedCallAndError:@"hs.speech:willSpeakWord callback" nargs:5 nresults:0];
+        _lua_stackguard_exit(_L);
     }
 }
 
 - (void)speechSynthesizer:(NSSpeechSynthesizer *)sender willSpeakPhoneme:(short)phonemeOpcode {
     if (((HSSpeechSynthesizer *)sender).callbackRef != LUA_NOREF) {
-        LuaSkin      *skin    = [LuaSkin shared];
+        LuaSkin      *skin    = [LuaSkin sharedWithState:NULL];
         lua_State    *_L      = [skin L];
+        _lua_stackguard_entry(_L);
 
         [skin pushLuaRef:refTable ref:((HSSpeechSynthesizer *)sender).callbackRef];
         [skin pushNSObject:(HSSpeechSynthesizer *)sender];
         lua_pushstring(_L, "willSpeakPhoneme");
         lua_pushinteger(_L, phonemeOpcode);
-        if (![skin protectedCallAndTraceback:3 nresults:0]) {
-            NSString *theError = [skin toNSObjectAtIndex:-1];
-            lua_pop(_L, 1);
-            [skin logError:[NSString stringWithFormat:@"hs.speech.setCallback() willSpeakPhoneme callback error: %@", theError]];
-        }
+        [skin protectedCallAndError:@"hs.speech:willSpeakPhoneme callback" nargs:3 nresults:0];
+        _lua_stackguard_exit(_L);
     }
 }
 
@@ -146,8 +142,9 @@ static NSString *getVoiceShortCut(NSString *theVoice) {
                                                                          message:(NSString *)errorMessage {
     NSLog(@"In error delegate");
     if (((HSSpeechSynthesizer *)sender).callbackRef != LUA_NOREF) {
-        LuaSkin      *skin    = [LuaSkin shared];
+        LuaSkin      *skin    = [LuaSkin sharedWithState:NULL];
         lua_State    *_L      = [skin L];
+        _lua_stackguard_entry(_L);
         NSDictionary *charMap = luaByteToObjCharMap(text);
 
         [skin pushLuaRef:refTable ref:((HSSpeechSynthesizer *)sender).callbackRef];
@@ -160,18 +157,16 @@ static NSString *getVoiceShortCut(NSString *theVoice) {
 
         [skin pushNSObject:text];
         [skin pushNSObject:errorMessage];
-        if (![skin protectedCallAndTraceback:5 nresults:0]) {
-            NSString *theError = [skin toNSObjectAtIndex:-1];
-            lua_pop(_L, 1);
-            [skin logError:[NSString stringWithFormat:@"hs.speech.setCallback() didEncounterError callback error: %@", theError]];
-        }
+        [skin protectedCallAndError:@"hs.speech:didEncounterError callback" nargs:5 nresults:0];
+        _lua_stackguard_exit(_L);
     }
 }
 
 - (void)speechSynthesizer:(NSSpeechSynthesizer *)sender didEncounterSyncMessage:(__unused NSString *)errorMessage {
     if (((HSSpeechSynthesizer *)sender).callbackRef != LUA_NOREF) {
-        LuaSkin      *skin    = [LuaSkin shared];
+        LuaSkin      *skin    = [LuaSkin sharedWithState:NULL];
         lua_State    *_L      = [skin L];
+        _lua_stackguard_entry(_L);
         NSError      *getError = nil ;
         [skin pushLuaRef:refTable ref:((HSSpeechSynthesizer *)sender).callbackRef];
         [skin pushNSObject:(HSSpeechSynthesizer *)sender];
@@ -184,16 +179,14 @@ static NSString *getVoiceShortCut(NSString *theVoice) {
         if (getError) {
             [skin logWarn:[NSString stringWithFormat:@"Error getting sync # for callback -> %@", [getError localizedDescription]]];
        }
-        if (![skin protectedCallAndTraceback:3 nresults:0]) {
-            NSString *theError = [skin toNSObjectAtIndex:-1];
-            lua_pop(_L, 1);
-            [skin logError:[NSString stringWithFormat:@"hs.speech.setCallback() didEncounterSync callback error: %@", theError]];
-        }
+        [skin protectedCallAndError:@"hs.speech:didEncounterSync callback" nargs:3 nresults:0];
+        _lua_stackguard_exit(_L);
     }
 }
 
 - (void)speechSynthesizer:(NSSpeechSynthesizer *)sender didFinishSpeaking:(BOOL)success {
-    LuaSkin             *skin  = [LuaSkin shared];
+    LuaSkin             *skin  = [LuaSkin sharedWithState:NULL];
+    _lua_stackguard_entry(skin.L);
     HSSpeechSynthesizer *synth = (HSSpeechSynthesizer *)sender ;
 
     if (synth.callbackRef != LUA_NOREF) {
@@ -203,24 +196,21 @@ static NSString *getVoiceShortCut(NSString *theVoice) {
         [skin pushNSObject:synth];
         lua_pushstring(_L, "didFinish");
         lua_pushboolean(_L, success);
-        if (![skin protectedCallAndTraceback:3 nresults:0]) {
-            NSString *theError = [skin toNSObjectAtIndex:-1];
-            lua_pop(_L, 1);
-            [skin logError:[NSString stringWithFormat:@"hs.speech.setCallback() didFinish callback error: %@", theError]];
-        }
+        [skin protectedCallAndError:@"hs.speech:didFinish callback" nargs:3 nresults:0];
     }
     if (synth.selfRef != LUA_NOREF) {
         synth.UDreferenceCount-- ;
         synth.selfRef = [skin luaUnref:refTable ref:synth.selfRef] ;
     }
+    _lua_stackguard_exit(skin.L);
 }
 
 @end
 
 #pragma mark - Module Functions
 
-// static int test(__unused lua_State *L) {
-//     LuaSkin *skin = [LuaSkin shared];
+// static int test(lua_State *L) {
+//     LuaSkin *skin = [LuaSkin sharedWithState:L];
 //     [skin checkArgs:LS_TSTRING, LS_TBREAK];
 //     [skin pushNSObject:luaByteToObjCharMap([skin toNSObjectAtIndex:1])];
 //     return 1;
@@ -239,7 +229,7 @@ static NSString *getVoiceShortCut(NSString *theVoice) {
 /// Notes:
 ///  * All of the names that have been encountered thus far follow this pattern for their full name:  `com.apple.speech.synthesis.voice.*name*`.  This prefix is normally suppressed unless you pass in true.
 static int availableVoices(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TBOOLEAN | LS_TOPTIONAL, LS_TBREAK];
 
     BOOL displayFullName = NO;
@@ -268,8 +258,8 @@ static int availableVoices(lua_State *L) {
 ///
 /// Notes:
 ///  * All of the names that have been encountered thus far follow this pattern for their full name:  `com.apple.speech.synthesis.voice.*name*`.  You can provide this suffix or not as you prefer when specifying a voice name.
-static int attributesForVoice(__unused lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+static int attributesForVoice(lua_State *L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TSTRING | LS_TNUMBER | LS_TNIL, LS_TBREAK];
 
     if (lua_type(L, 1) != LUA_TNIL) luaL_checkstring(L, 1); // force number to be a string
@@ -289,8 +279,8 @@ static int attributesForVoice(__unused lua_State *L) {
 ///
 /// Notes:
 ///  * All of the names that have been encountered thus far follow this pattern for their full name:  `com.apple.speech.synthesis.voice.*name*`.  This prefix is normally suppressed unless you pass in true.
-static int defaultVoice(__unused lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+static int defaultVoice(lua_State *L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TBOOLEAN | LS_TOPTIONAL, LS_TBREAK];
     BOOL displayFullName = NO;
 
@@ -315,7 +305,7 @@ static int defaultVoice(__unused lua_State *L) {
 /// Notes:
 ///  * See also `hs.speech:speaking`.
 static int isAnyApplicationSpeaking(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TBREAK];
 
     lua_pushboolean(L, [NSSpeechSynthesizer isAnyApplicationSpeaking]);
@@ -336,7 +326,7 @@ static int isAnyApplicationSpeaking(lua_State *L) {
 ///  * All of the names that have been encountered thus far follow this pattern for their full name:  `com.apple.speech.synthesis.voice.*name*`.  You can provide this suffix or not as you prefer when specifying a voice name.
 ///  * You can change the voice later with the `hs.speech:voice` method.
 static int newSpeechSynthesizer(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TSTRING | LS_TNUMBER | LS_TOPTIONAL, LS_TBREAK];
 
     NSString *theVoice = nil;
@@ -371,7 +361,7 @@ static int newSpeechSynthesizer(lua_State *L) {
 /// Notes:
 ///  * *Special Note:* I am not sure where the visual feedback actually occurs -- I have not been able to locate a feedback window for synthesis in 10.11; however the method is defined and not marked deprecated, so I include it in the module.  If anyone has more information, please file an issue and the documentation will be updated.
 static int usesFeedbackWindow(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBOOLEAN | LS_TOPTIONAL, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -400,7 +390,7 @@ static int usesFeedbackWindow(lua_State *L) {
 ///  * The voice cannot be changed while the synthesizer is currently producing output.
 ///  * If you change the voice while a synthesizer is paused, the current synthesis will be terminated and the voice will be changed.
 static int voice(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBOOLEAN | LS_TSTRING | LS_TNUMBER | LS_TNIL | LS_TOPTIONAL, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -440,7 +430,7 @@ static int voice(lua_State *L) {
 /// Notes:
 ///  * The range of supported rates is not predefined by the Speech Synthesis framework; but the synthesizer may only respond to a limited range of speech rates. Average human speech occurs at a rate of 180.0 to 220.0 words per minute.
 static int rate(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TNUMBER | LS_TOPTIONAL, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -466,7 +456,7 @@ static int rate(lua_State *L) {
 /// Notes:
 ///  * Volume units lie on a scale that is linear with amplitude or voltage. A doubling of perceived loudness corresponds to a doubling of the volume.
 static int volume(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TNUMBER | LS_TOPTIONAL, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -497,7 +487,7 @@ static int volume(lua_State *L) {
 /// Notes:
 ///  * See also `hs.speech.isAnyApplicationSpeaking`.
 static int speaking(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -538,7 +528,7 @@ static int speaking(lua_State *L) {
 ///    * "didFinish"         - Sent when the speech synthesizer finishes speaking through the sound output device.
 ///      * provides 1 additional argument: a boolean flag indicating whether or not the synthesizer finished because synthesis is complete (true) or was stopped early with `hs.speech:stop` (false).
 static int setCallback(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TFUNCTION | LS_TNIL, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -562,7 +552,7 @@ static int setCallback(lua_State *L) {
 /// Returns:
 ///  * the synthesizer object
 static int startSpeakingString(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING | LS_TNUMBER, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -593,7 +583,7 @@ static int startSpeakingString(lua_State *L) {
 /// Returns:
 ///  * the synthesizer object
 static int startSpeakingStringToURL(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING | LS_TNUMBER, LS_TSTRING | LS_TNUMBER, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -631,7 +621,7 @@ static int startSpeakingStringToURL(lua_State *L) {
 /// Returns:
 ///  * the synthesizer object
 static int pauseSpeakingAtBoundary(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING | LS_TNUMBER | LS_TOPTIONAL, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -667,7 +657,7 @@ static int pauseSpeakingAtBoundary(lua_State *L) {
 /// Returns:
 ///  * the synthesizer object
 static int stopSpeakingAtBoundary(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING | LS_TNUMBER | LS_TOPTIONAL, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -704,7 +694,7 @@ static int stopSpeakingAtBoundary(lua_State *L) {
 /// Returns:
 ///  * the synthesizer object
 static int continueSpeaking(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -717,7 +707,7 @@ static int continueSpeaking(lua_State *L) {
 //
 // static int stopSpeaking(lua_State *L) {
 //     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
-//     LuaSkin *skin = [LuaSkin shared];
+//     LuaSkin *skin = [LuaSkin sharedWithState:L];
 //     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
 //     [synth stopSpeaking];
 //     lua_pushvalue(L, 1);
@@ -739,7 +729,7 @@ static int continueSpeaking(lua_State *L) {
 ///  * You can modify the phonetic representation and feed it into `hs.speech:speak` if you find that the default interpretation is not correct.  You will need to set the input mode to Phonetic by prefixing the text with "[[inpt PHON]]".
 ///  * The specific phonetic symbols recognized by a given voice can be queried by examining the array returned by `hs.speech:phoneticSymbols` after setting an appropriate voice.
 static int phonemesFromText(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TSTRING | LS_TNUMBER, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -763,7 +753,7 @@ static int phonemesFromText(lua_State *L) {
 /// Notes:
 ///  * If an error occurs retrieving this value, the details will be logged in the system logs which can be viewed with the Console application.  You can also have such messages logged to the Hammerspoon console by setting the module's log level to at least Information (This can be done with the following, or similar, command: `hs.speech.log.level = 3`.  See `hs.logger` for more information)
 static int isSpeaking(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -797,7 +787,7 @@ static int isSpeaking(lua_State *L) {
 /// Notes:
 ///  * If an error occurs retrieving this value, the details will be logged in the system logs which can be viewed with the Console application.  You can also have such messages logged to the Hammerspoon console by setting the module's log level to at least Information (This can be done with the following, or similar, command: `hs.speech.log.level = 3`.  See `hs.logger` for more information)
 static int isPaused(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -840,7 +830,7 @@ static int isPaused(lua_State *L) {
 ///
 ///  * If an error occurs retrieving this value, the details will be logged in the system logs which can be viewed with the Console application.  You can also have such messages logged to the Hammerspoon console by setting the module's log level to at least Information (This can be done with the following, or similar, command: `hs.speech.log.level = 3`.  See `hs.logger` for more information)
 static int phoneticSymbols(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -870,7 +860,7 @@ static int phoneticSymbols(lua_State *L) {
 ///
 ///  * If an error occurs retrieving or setting this value, the details will be logged in the system logs which can be viewed with the Console application.  You can also have such messages logged to the Hammerspoon console by setting the module's log level to at least Information (This can be done with the following, or similar, command: `hs.speech.log.level = 3`.  See `hs.logger` for more information)
 static int pitchBase(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TNUMBER | LS_TOPTIONAL, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -912,7 +902,7 @@ static int pitchBase(lua_State *L) {
 ///
 ///  * If an error occurs retrieving or setting this value, the details will be logged in the system logs which can be viewed with the Console application.  You can also have such messages logged to the Hammerspoon console by setting the module's log level to at least Information (This can be done with the following, or similar, command: `hs.speech.log.level = 3`.  See `hs.logger` for more information)
 static int pitchMod(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TNUMBER | LS_TOPTIONAL, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -955,7 +945,7 @@ static int pitchMod(lua_State *L) {
 ///
 ///  * If an error occurs retrieving or setting this value, the details will be logged in the system logs which can be viewed with the Console application.  You can also have such messages logged to the Hammerspoon console by setting the module's log level to at least Information (This can be done with the following, or similar, command: `hs.speech.log.level = 3`.  See `hs.logger` for more information)
 static int reset(lua_State *L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin checkArgs:LS_TUSERDATA, USERDATA_TAG, LS_TBREAK];
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
 
@@ -990,7 +980,7 @@ static int pushHSSpeechSynthesizer(lua_State *L, id obj) {
 
 static int userdata_tostring(lua_State* L) {
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge HSSpeechSynthesizer, L, 1);
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     [skin pushNSObject:[NSString stringWithFormat:@"%s: %@ (%p)", USERDATA_TAG, [synth voice], (void *)synth]];
     return 1;
 }
@@ -1008,7 +998,7 @@ static int userdata_eq(lua_State* L) {
 
 static int userdata_gc(lua_State* L) {
     HSSpeechSynthesizer *synth = get_objectFromUserdata(__bridge_transfer HSSpeechSynthesizer, L, 1);
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     synth.UDreferenceCount--;
 
     if (synth.UDreferenceCount == 0) {
@@ -1075,8 +1065,8 @@ static luaL_Reg moduleLib[] = {
 //     {NULL,   NULL}
 // };
 
-int luaopen_hs_speech_internal(lua_State* __unused L) {
-    LuaSkin *skin = [LuaSkin shared];
+int luaopen_hs_speech_internal(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     refTable = [skin registerLibraryWithObject:USERDATA_TAG
                                      functions:moduleLib
                                  metaFunctions:nil    // or module_metaLib

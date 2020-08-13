@@ -1,46 +1,65 @@
 PODS:
   - ASCIImage (1.0.0)
-  - CocoaAsyncSocket (7.6.2)
+  - CocoaAsyncSocket (7.6.4)
   - CocoaHTTPServer (2.3):
     - CocoaAsyncSocket
     - CocoaLumberjack
-  - CocoaLumberjack (3.4.1):
-    - CocoaLumberjack/Default (= 3.4.1)
-    - CocoaLumberjack/Extensions (= 3.4.1)
-  - CocoaLumberjack/Default (3.4.1)
-  - CocoaLumberjack/Extensions (3.4.1):
-    - CocoaLumberjack/Default
-  - Crashlytics (3.9.3):
-    - Fabric (~> 1.7.2)
-  - Fabric (1.7.2)
-  - MIKMIDI (1.6.2)
+  - CocoaLumberjack (3.5.3):
+    - CocoaLumberjack/Core (= 3.5.3)
+  - CocoaLumberjack/Core (3.5.3)
+  - MIKMIDI (1.7.0)
   - PocketSocket/Client (1.0.1):
     - PocketSocket/Core
   - PocketSocket/Core (1.0.1)
-  - Sparkle (1.18.1)
+  - Sentry (5.0.0):
+    - Sentry/Core (= 5.0.0)
+  - Sentry/Core (5.0.0)
+  - SocketRocket (0.5.1)
+  - Sparkle (1.22.0)
 
 DEPENDENCIES:
   - ASCIImage (= 1.0.0)
-  - CocoaAsyncSocket (= 7.6.2)
+  - CocoaAsyncSocket (= 7.6.4)
   - CocoaHTTPServer (= 2.3)
-  - CocoaLumberjack (= 3.4.1)
-  - Crashlytics (= 3.9.3)
-  - Fabric (= 1.7.2)
-  - MIKMIDI
+  - CocoaLumberjack (= 3.5.3)
+  - MIKMIDI (= 1.7.0)
   - PocketSocket/Client (= 1.0.1)
-  - Sparkle (= 1.18.1)
+  - Sentry (from `https://github.com/getsentry/sentry-cocoa.git`, tag `5.0.0`)
+  - SocketRocket
+  - Sparkle (= 1.22.0)
+
+SPEC REPOS:
+  https://github.com/CocoaPods/Specs.git:
+    - ASCIImage
+    - CocoaAsyncSocket
+    - CocoaHTTPServer
+    - CocoaLumberjack
+    - MIKMIDI
+    - PocketSocket
+    - SocketRocket
+    - Sparkle
+
+EXTERNAL SOURCES:
+  Sentry:
+    :git: https://github.com/getsentry/sentry-cocoa.git
+    :tag: 5.0.0
+
+CHECKOUT OPTIONS:
+  Sentry:
+    :git: https://github.com/getsentry/sentry-cocoa.git
+    :tag: 5.0.0
 
 SPEC CHECKSUMS:
   ASCIImage: bcff9650deae86e0e0ac310145cc628948201ab8
-  CocoaAsyncSocket: 3541e024f48c54b251638ef72d51dd42808de932
+  CocoaAsyncSocket: 694058e7c0ed05a9e217d1b3c7ded962f4180845
   CocoaHTTPServer: 5624681fc3473d43b18202f635f9b3abb013b530
-  CocoaLumberjack: 2e258a064cacc8eb9a2aca318e24d02a0a7fd56d
-  Crashlytics: dbb07d01876c171c5ccbdf7826410380189e452c
-  Fabric: 9cd6a848efcf1b8b07497e0b6a2e7d336353ba15
-  MIKMIDI: fa6df0bfa8427a0dc9e179bcf068b2b4b6747e6c
+  CocoaLumberjack: 2f44e60eb91c176d471fdba43b9e3eae6a721947
+  MIKMIDI: a9192db16687fcf1d2c82b98492b999fa8ede7c6
   PocketSocket: 9c6867d66fb4f962af96b9b07f4b45bb561b2c2a
-  Sparkle: 06ea33170007c5937ee54da481b4481af98fac79
+  Sentry: 1279f37a5691c19b1b761f7e260bba5dab7c2311
+  SocketRocket: d57c7159b83c3c6655745cd15302aa24b6bae531
+  Sparkle: 593ac2e677c07bcb6c3b22d621240e7cbedaab57
 
-PODFILE CHECKSUM: 0190c25c88bfb32f1c33c6b475ba535918ceb6f4
+PODFILE CHECKSUM: d756d8f4a506be49803849e63b407a73b80805ca
 
-COCOAPODS: 1.4.0
+COCOAPODS: 1.8.4

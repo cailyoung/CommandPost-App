@@ -22,7 +22,7 @@ local timer    = require("hs.timer")
 local __tostring_for_tables = function(self)
     local result = ""
     local width = 0
-    for i,v in fnutils.sortByKeys(self) do
+    for i,_ in fnutils.sortByKeys(self) do
         if type(i) == "string" and width < i:len() then width = i:len() end
     end
     for i,v in fnutils.sortByKeys(self) do
@@ -34,7 +34,7 @@ local __tostring_for_tables = function(self)
 end
 
 local __index_for_types = function(object, key)
-    for i,v in pairs(object) do
+    for i,_ in pairs(object) do
         if type(i) == "string" then -- ignore numbered keys
             if i:lower() == key then
                 print(debug.getinfo(2).short_src..":"..debug.getinfo(2).currentline..": type '"..key.."' is deprecated, use '"..i.."'")
@@ -46,7 +46,7 @@ local __index_for_types = function(object, key)
 end
 
 local __index_for_props = function(object, key)
-    for i,v in pairs(object) do
+    for i,_ in pairs(object) do
         if type(i) == "string" then -- ignore numbered keys
             if i:sub(1,1):upper()..i:sub(2,-1) == key then
                 print(debug.getinfo(2).short_src..":"..debug.getinfo(2).currentline..": property '"..key.."' is deprecated, use '"..i.."'")
@@ -140,9 +140,9 @@ end
 --- Creates a new mouse event
 ---
 --- Parameters:
----  * eventtype - One of the values from `hs.eventtap.event.types`
+---  * eventtype - One of the mouse related values from `hs.eventtap.event.types`
 ---  * point - An hs.geometry point table (i.e. of the form `{x=123, y=456}`) indicating the location where the mouse event should occur
----  * modifiers - An optional table containing zero or more of the following keys:
+---  * modifiers - An optional table (e.g. {"cmd", "alt"}) containing zero or more of the following keys:
 ---   * cmd
 ---   * alt
 ---   * shift
@@ -153,13 +153,15 @@ end
 ---  * An `hs.eventtap` object
 function module.event.newMouseEvent(eventtype, point, modifiers)
     local types = module.event.types
-    local button = nil
+    local button
     if eventtype == types["leftMouseDown"] or eventtype == types["leftMouseUp"] or eventtype == types["leftMouseDragged"] then
         button = "left"
     elseif eventtype == types["rightMouseDown"] or eventtype == types["rightMouseUp"] or eventtype == types["rightMouseDragged"] then
         button = "right"
     elseif eventtype == types["otherMouseDown"] or eventtype == types["otherMouseUp"] or eventtype == types["otherMouseDragged"] then
         button = "other"
+    elseif eventtype == types["mouseMoved"] then
+        button = "none"
     else
         print("Error: unrecognised mouse button eventtype: " .. tostring(eventtype))
         return nil
@@ -270,7 +272,7 @@ end
 --- Parameters:
 ---  * modifiers - A table containing the keyboard modifiers to apply ("fn", "ctrl", "alt", "cmd", "shift", or their Unicode equivalents)
 ---  * character - A string containing a character to be emitted
----  * delay - An optional delay (in microseconds) between mouse down and up event. Defaults to 200000 (i.e. 200ms)
+---  * delay - An optional delay (in microseconds) between key down and up event. Defaults to 200000 (i.e. 200ms)
 ---
 --- Returns:
 ---  * None

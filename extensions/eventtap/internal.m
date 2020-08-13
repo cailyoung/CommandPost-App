@@ -11,16 +11,24 @@ typedef struct _eventtap_t {
 } eventtap_t;
 
 CGEventRef eventtap_callback(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *refcon) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:NULL];
     lua_State *L = skin.L;
+    _lua_stackguard_entry(L);
 
     eventtap_t* e = refcon;
+
+    // Guard against a crash where e->fn is a LUA_NOREF/LUA_REFNIL, which shouldn't be possible (maybe a subtle race condition?)
+    if (e->fn == LUA_NOREF || e->fn == LUA_REFNIL) {
+        [skin logBreadcrumb:@"eventtap_callback called with LUA_NOREF/LUA_REFNIL"];
+        return event;
+    }
 
 //  apparently OS X disables eventtaps if it thinks they are slow or odd or just because the moon
 //  is wrong in some way... but at least it's nice enough to tell us.
     if ((type == kCGEventTapDisabledByTimeout) || (type == kCGEventTapDisabledByUserInput)) {
         [skin logBreadcrumb:[NSString stringWithFormat:@"eventtap restarted: (%d)", type]] ;
         CGEventTapEnable(e->tap, true);
+        _lua_stackguard_exit(L);
         return event ;
     }
 
@@ -35,6 +43,7 @@ CGEventRef eventtap_callback(CGEventTapProxy proxy, CGEventType type, CGEventRef
             [skin logError:[NSString stringWithFormat:@"hs.eventtap callback error: %s", errorMsg]];
         }
         lua_pop(L, 1) ; // remove error message
+        _lua_stackguard_exit(L);
         return NULL;
     }
 
@@ -50,6 +59,7 @@ CGEventRef eventtap_callback(CGEventTapProxy proxy, CGEventType type, CGEventRef
     }
 
     lua_pop(L, 2);
+    _lua_stackguard_exit(L);
 
     if (ignoreevent)
         return NULL;
@@ -111,7 +121,7 @@ static int eventtap_keyStrokes(lua_State* L) {
 /// Notes:
 ///  * If you specify the argument `types` as the special table {"all"[, events to ignore]}, then *all* events (except those you optionally list *after* the "all" string) will trigger a callback, even events which are not defined in the [Quartz Event Reference](https://developer.apple.com/library/mac/documentation/Carbon/Reference/QuartzEventServicesRef/Reference/reference.html).
 static int eventtap_new(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
 
     luaL_checktype(L, 1, LUA_TTABLE);
     luaL_checktype(L, 2, LUA_TFUNCTION);
@@ -156,7 +166,7 @@ static int eventtap_new(lua_State* L) {
 /// Returns:
 ///  * The event tap object
 static int eventtap_start(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     eventtap_t* e = luaL_checkudata(L, 1, USERDATA_TAG);
 
     if (!(e->tap && CGEventTapIsEnabled(e->tap))) {
@@ -254,15 +264,52 @@ static int checkKeyboardModifiers(lua_State* L) {
 
     lua_newtable(L);
 
-    if (lua_isboolean(L, 1) && lua_toboolean(L, 1)) { lua_pushinteger(L, (lua_Integer)theFlags); lua_setfield(L, -2, "_raw"); }
+    if (lua_isboolean(L, 1) && lua_toboolean(L, 1)) {
+        lua_pushinteger(L, (lua_Integer)theFlags); lua_setfield(L, -2, "_raw");
+    }
 
-    if (theFlags & NSCommandKeyMask)    { lua_pushboolean(L, YES); lua_setfield(L, -2, "cmd"); lua_pushboolean(L, YES); lua_setfield(L, -2, "⌘"); }
-    if (theFlags & NSShiftKeyMask)      { lua_pushboolean(L, YES); lua_setfield(L, -2, "shift"); lua_pushboolean(L, YES); lua_setfield(L, -2, "⇧"); }
-    if (theFlags & NSAlternateKeyMask)  { lua_pushboolean(L, YES); lua_setfield(L, -2, "alt"); lua_pushboolean(L, YES); lua_setfield(L, -2, "⌥"); }
-    if (theFlags & NSControlKeyMask)    { lua_pushboolean(L, YES); lua_setfield(L, -2, "ctrl"); lua_pushboolean(L, YES); lua_setfield(L, -2, "⌃"); }
-    if (theFlags & NSFunctionKeyMask)   { lua_pushboolean(L, YES); lua_setfield(L, -2, "fn"); }
-    if (theFlags & NSAlphaShiftKeyMask) { lua_pushboolean(L, YES); lua_setfield(L, -2, "capslock"); }
+    if (theFlags & NSEventModifierFlagCommand) {
+        lua_pushboolean(L, YES); lua_setfield(L, -2, "cmd"); lua_pushboolean(L, YES); lua_setfield(L, -2, "⌘");
+    }
+    if (theFlags & NSEventModifierFlagShift) {
+        lua_pushboolean(L, YES); lua_setfield(L, -2, "shift"); lua_pushboolean(L, YES); lua_setfield(L, -2, "⇧");
+    }
+    if (theFlags & NSEventModifierFlagOption) {
+        lua_pushboolean(L, YES); lua_setfield(L, -2, "alt"); lua_pushboolean(L, YES); lua_setfield(L, -2, "⌥");
+    }
+    if (theFlags & NSEventModifierFlagControl) {
+        lua_pushboolean(L, YES); lua_setfield(L, -2, "ctrl"); lua_pushboolean(L, YES); lua_setfield(L, -2, "⌃");
+    }
+    if (theFlags & NSEventModifierFlagFunction) {
+        lua_pushboolean(L, YES); lua_setfield(L, -2, "fn");
+    }
+    if (theFlags & NSEventModifierFlagCapsLock) {
+        lua_pushboolean(L, YES); lua_setfield(L, -2, "capslock");
+    }
 
+    return 1;
+}
+
+/// hs.eventtap.isSecureInputEnabled() -> boolean
+/// Function
+/// Checks if macOS is preventing keyboard events from being sent to event taps
+///
+/// Parameters:
+///  * None
+///
+/// Returns:
+///  * A boolean, true if secure input is enabled, otherwise false
+///
+/// Notes:
+///  * If secure input is enabled, Hammerspoon is not able to intercept keyboard events
+///  * Secure input is enabled generally only in situations where an password field is focused in a web browser, system dialog or terminal
+static int secureInputEnabled(lua_State *L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
+    [skin checkArgs:LS_TBREAK];
+
+    BOOL isSecure = (BOOL)IsSecureEventInputEnabled();
+
+    lua_pushboolean(L, isSecure);
     return 1;
 }
 
@@ -350,7 +397,7 @@ static int eventtap_doubleClickInterval(lua_State* L) {
 }
 
 static int eventtap_gc(lua_State* L) {
-    LuaSkin *skin = [LuaSkin shared];
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
 
     eventtap_t* eventtap = luaL_checkudata(L, 1, USERDATA_TAG);
     if (eventtap->tap) {
@@ -397,6 +444,7 @@ static luaL_Reg eventtaplib[] = {
     {"keyRepeatDelay",          eventtap_keyRepeatDelay},
     {"keyRepeatInterval",       eventtap_keyRepeatInterval},
     {"doubleClickInterval",     eventtap_doubleClickInterval},
+    {"isSecureInputEnabled", secureInputEnabled},
     {NULL,      NULL}
 };
 
@@ -406,8 +454,8 @@ static const luaL_Reg meta_gcLib[] = {
     {NULL,      NULL}
 };
 
-int luaopen_hs_eventtap_internal(lua_State* L __unused) {
-    LuaSkin *skin = [LuaSkin shared];
+int luaopen_hs_eventtap_internal(lua_State* L) {
+    LuaSkin *skin = [LuaSkin sharedWithState:L];
     refTable = [skin registerLibraryWithObject:USERDATA_TAG functions:eventtaplib metaFunctions:meta_gcLib objectFunctions:eventtap_metalib];
 
     return 1;

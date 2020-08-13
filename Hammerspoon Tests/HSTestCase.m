@@ -13,6 +13,7 @@
 - (void)setUpWithRequire:(NSString *)requireName {
     [super setUp];
     self.isTravis = [self runningInTravis];
+    self.isXcodeServer = [self runningInXcodeServer];
 
     NSString *result = [self runLua:[NSString stringWithFormat:@"require('%@')", requireName]];
     XCTAssertEqualObjects(@"true", result, @"Unable to load %@.lua", requireName);
@@ -32,19 +33,49 @@
     return [result isEqualToString:@"Success"];
 }
 
-- (BOOL)luaTestWithCheckAndTimeOut:(NSTimeInterval)timeOut setupCode:(NSString *)setupCode checkCode:(NSString *)checkCode {
-    NSDate *timeoutDate = [NSDate dateWithTimeIntervalSinceNow:timeOut];
-    BOOL result = NO;
+- (void)luaTestWithCheckAndTimeOut:(NSTimeInterval)timeOut setupCode:(NSString *)setupCode checkCode:(NSString *)checkCode {
+    XCTestExpectation *expectation = [self expectationWithDescription:setupCode];
 
-    [self runLua:setupCode];
-
-    while (result == NO && ([timeoutDate timeIntervalSinceNow] > 0)) {
-        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.5, NO);
-        result = [self luaTest:checkCode];
+    NSLog(@"Calling setup code: %@", setupCode);
+    NSString *result = [self runLua:setupCode];
+    NSLog(@"Test returned %@ for: %@", result, setupCode);
+    if (![result isEqualToString:@"Success"]) {
+        // Invert the expectation and then fulfill it, to force a failure
+        expectation.inverted = YES;
+        [expectation fulfill];
+        return;
     }
 
-    return result;
+    NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *timer) {
+        NSLog(@"Calling check code: %@", checkCode);
+        BOOL result = [self luaTest:checkCode];
+        if (result) {
+            [expectation fulfill];
+            [timer invalidate];
+        }
+    }];
+/*    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        NSLog(@"Calling check code: %@", checkCode);
+        BOOL result = [self luaTest:checkCode];
+        if (result) {
+            [expectation fulfill];
+        }
+    });*/
+    [self waitForExpectationsWithTimeout:timeOut handler:^(NSError *error) {
+        if (error) {
+            NSLog(@"%@ failed", setupCode);
+        } else {
+            NSLog(@"%@ succeeded", setupCode);
+        }
+        [timer invalidate];
+    }];
 }
+
+- (void)twoPartTestName:(SEL)selector withTimeout:(NSTimeInterval)timeout {
+    NSString *funcName = NSStringFromSelector(selector);
+    [self luaTestWithCheckAndTimeOut:timeout setupCode:[funcName stringByAppendingString:@"()"] checkCode:[funcName stringByAppendingString:@"Values()"]];
+}
+
 - (BOOL)luaTestFromSelector:(SEL)selector {
     NSString *funcName = NSStringFromSelector(selector);
     NSLog(@"Calling Lua function from selector: %@()", funcName);
@@ -53,6 +84,10 @@
 
 - (BOOL)runningInTravis {
     return (getenv("TRAVIS") != NULL);
+}
+
+- (BOOL)runningInXcodeServer {
+    return (getenv("XCS") != NULL);
 }
 
 // Tests of the above methods

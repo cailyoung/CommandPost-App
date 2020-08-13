@@ -4,12 +4,18 @@
 
 return {setup=function(...)
   local modpath, prettypath, fullpath, configdir, docstringspath, hasinitfile, autoload_extensions = ...
-  local tostring,pack,tconcat,sformat=tostring,table.pack,table.concat,string.format
+  local tostring,pack,tconcat,sformat,tsort=tostring,table.pack,table.concat,string.format,table.sort
+  local traceback = debug.traceback
   local crashLog = require("hs.crash").crashLog
+  local fnutils = require("hs.fnutils")
+  local hsmath = require("hs.math")
+
+  -- seed RNG before we do anything else
+  math.randomseed(math.floor(hsmath.randomFloat()*100000000000000))
 
   -- setup core functions
 
-  os.exit = hs._exit
+  os.exit = hs._exit -- luacheck: ignore
 
 --- hs.configdir
 --- Constant
@@ -59,6 +65,58 @@ hs.textDroppedToDockIconCallback = nil
 ---  * This callback will be triggered when ANY file type is dragged onto the Hammerspoon Dock Icon, however certain filetypes are also processed seperately by Hammerspoon. For example, `hs.urlevent` will be triggered when the following filetypes are dropped onto the Dock Icon: HTML Documents (.html, .htm, .shtml, .jhtml), Plain text documents (.txt, .text), Web site locations (.url), XHTML documents (.xhtml, .xht, .xhtm, .xht).
 hs.fileDroppedToDockIconCallback = nil
 
+--- hs.relaunch()
+--- Function
+--- Quits and relaunches Hammerspoon.
+---
+--- Parameters:
+---  * None
+---
+--- Returns:
+---  * None
+hs.relaunch = function()
+    os.execute([[ (while ps -p ]]..hs.processInfo.processID..[[ > /dev/null ; do sleep 1 ; done ; open -a "]]..hs.processInfo.bundlePath..[[" ) & ]])
+    hs._exit(true, true)
+end
+
+--- hs.coroutineApplicationYield([delay])
+--- Function
+--- Yield coroutine to allow the Hammerspoon application to process other scheduled events and schedule a resume in the event application queue.
+---
+--- Parameters:
+---  * `delay` - an optional number, default `hs.math.minFloat`, specifying the number of seconds from when this function is executed that the `coroutine.resume` should be scheduled for.
+---
+--- Returns:
+---  * None
+---
+--- Notes:
+---  * this function will return an error if invoked outside of a coroutine.
+---  * unlike `coroutine.yield`, this function does not allow the passing of (new) information to or from the coroutine while it is running; this function is to allow long running tasks to yield time to the Hammerspoon application so other timers and scheduled events can occur without requiring the programmer to add code for an explicit resume.
+---
+---  * this function is added to the lua `coroutine` library as `coroutine.applicationYield` as an alternative name.
+local resumeTimers = {}
+
+hs.coroutineApplicationYield = function(delay)
+    delay = delay or require"hs.math".minFloat
+
+    local thread, isMain = coroutine.running()
+    if not isMain then
+        local uuid = require"hs.host".uuid()
+        resumeTimers[uuid] = require"hs.timer".doAfter(delay, function()
+            resumeTimers[uuid] = nil
+            local status, msg = coroutine.resume(thread)
+            if not status then
+                hs.luaSkinLog.ef("hs.coroutineApplicationYield: %s", msg)
+            end
+        end)
+        coroutine.yield()
+    else
+        error("attempt to yield from outside a coroutine", 2)
+    end
+end
+
+coroutine.applicationYield = hs.coroutineApplicationYield
+
 --- hs.docstrings_json_file
 --- Constant
 --- A string containing the full path to the `docs.json` file inside Hammerspoon's app bundle. This contains the full Hammerspoon API documentation and can be accessed in the Console using `help("someAPI")`. It can also be loaded and processed by the `hs.doc` extension
@@ -81,11 +139,10 @@ hs.fileDroppedToDockIconCallback = nil
 
   function hs.showError(err)
     hs._notify("Hammerspoon error") -- undecided on this line
-    --  print(debug.traceback())
+    --  print(traceback())
     print("*** ERROR: "..err)
     hs.focus()
     hs.openConsole()
-    hs._TERMINATED=true
   end
 
   function hs.assert(pred,desc,data)
@@ -135,7 +192,7 @@ hs.fileDroppedToDockIconCallback = nil
 ---  * Hammerspoon overrides Lua's print() function, but this is a reference we retain to is, should you need it for any reason
   local rawprint,logmessage = print,hs._logmessage
   hs.rawprint = rawprint
-  function print(...)
+  function print(...) -- luacheck: ignore
 --    rawprint(...)
     local vals = pack(...)
 
@@ -181,6 +238,7 @@ hs.fileDroppedToDockIconCallback = nil
 ---  * Setting `with_user_env` to true does incur noticeable overhead, so it should only be used if necessary (to set the path or other environment variables).
 ---  * Because this function returns the stdout as it's first return value, it is not quite a drop-in replacement for `os.execute`.  In most cases, it is probable that `stdout` will be the empty string when `status` is nil, but this is not guaranteed, so this trade off of shifting os.execute's results was deemed acceptable.
 ---  * This particular function is most useful when you're more interested in the command's output then a simple check for completion and result codes.  If you only require the result codes or verification of command completion, then `os.execute` will be slightly more efficient.
+---  * If you need to execute commands that have spaces in their paths, use a form like: `hs.execute [["/Some/Path To/An/Executable" "--first-arg" "second-arg"]]`
   hs.execute = function(command, user_env)
     local f
     if user_env then
@@ -231,10 +289,37 @@ hs.fileDroppedToDockIconCallback = nil
 ---  * To learn how to distribute your own code as a Spoon, see https://github.com/Hammerspoon/hammerspoon/blob/master/SPOON.md
   hs.loadSpoon = function (name, global)
     print("-- Loading Spoon: "..name)
+
+    -- First, find the full path of the Spoon
+    local spoonFile = package.searchpath(name, package.path)
+    if spoonFile == nil then
+        hs.showError("Unable to load Spoon: "..name)
+        return
+    end
+    local spoonPath = spoonFile:match("(.*/)")
+
+    -- Check if the Spoon contains a meta.json
+    local metaData = {}
+    local mf = io.open(spoonPath.."meta.json", "r")
+    if mf then
+        local fileData = mf:read("*a")
+        mf:close()
+        local json = require("hs.json")
+        local metaDataTmp = json.decode(fileData)
+        if metaDataTmp then
+            metaData = metaDataTmp
+        end
+    end
+
     -- Load the Spoon code
     local obj = require(name)
 
     if obj then
+      -- Inject the full path of the Spoon
+      obj.spoonPath = spoonPath
+      -- Inject the Spoon's metadata
+      obj.spoonMeta = metaData
+
       -- If the Spoon has an init method, call it
       if obj.init then
         obj:init()
@@ -250,10 +335,11 @@ hs.fileDroppedToDockIconCallback = nil
 
       -- If the Spoon has docs, load them
       if obj.spoonPath then
-        require("hs.fs")
         local docsPath = obj.spoonPath.."/docs.json"
-        if hs.fs.attributes(docsPath) then
-          require("hs.doc").registerJSONFile(docsPath, true)
+        local fs = require("hs.fs")
+        if fs.attributes(docsPath) then
+          local doc = require("hs.doc")
+          doc.registerJSONFile(docsPath, true)
         end
       end
     end
@@ -282,7 +368,7 @@ hs.fileDroppedToDockIconCallback = nil
 ---    * the identifier `lua._C` will provide information specifically about the Lua C API for use when developing modules which require external libraries.
 
   hs.help = require("hs.doc")
-  help = hs.help
+  help = hs.help -- luacheck: ignore
 
 
 --- hs.hsdocs([identifier])
@@ -322,7 +408,8 @@ hs.fileDroppedToDockIconCallback = nil
   hs.hsdocs = setmetatable({
     __node = "",
     __action = function(what)
-        require("hs.doc.hsdocs").help((what ~= "") and what or nil)
+        local hsdocs = require("hs.doc.hsdocs")
+        hsdocs.help((what ~= "") and what or nil)
     end
   }, hsdocsMetatable)
 
@@ -332,7 +419,8 @@ hs.fileDroppedToDockIconCallback = nil
     hs._extensions = {}
 
     -- Discover extensions in our .app bundle
-    local iter, dir_obj = require("hs.fs").dir(modpath.."/hs")
+    local fs = require("hs.fs")
+    local iter, dir_obj = fs.dir(modpath.."/hs")
     local extension = iter(dir_obj)
     while extension do
       if (extension ~= ".") and (extension ~= "..") then
@@ -343,7 +431,7 @@ hs.fileDroppedToDockIconCallback = nil
 
     -- Inject a lazy extension loader into the main HS table
     setmetatable(hs, {
-      __index = function(t, key)
+      __index = function(_, key)
         if hs._extensions[key] ~= nil then
           print("-- Loading extension: "..key)
           hs[key] = require("hs."..key)
@@ -362,7 +450,7 @@ hs.fileDroppedToDockIconCallback = nil
       local levelLabels = { "ERROR", "WARNING", "INFO", "DEBUG", "VERBOSE" }
     -- may change in the future if this fills crashlog with too much useless stuff
       if level ~= 5 then
-          crashLog(string.format("(%s) %s", (levelLabels[level] or tostring(level)), message))
+          crashLog(sformat("(%s) %s", (levelLabels[level] or tostring(level)), message))
       end
 
       if level == 5 then     logger.v(message) -- LS_LOG_VERBOSE
@@ -384,7 +472,7 @@ hs.fileDroppedToDockIconCallback = nil
     if not fn then return false, tostring(err) end
 
     local str = ""
-    local results = pack(xpcall(fn,debug.traceback))
+    local results = pack(xpcall(fn,traceback))
     for i = 2,results.n do
       if i > 2 then str = str .. "\t" end
       str = str .. tostring(results[i])
@@ -414,7 +502,7 @@ hs.fileDroppedToDockIconCallback = nil
     if not fn then return tostring(err) end
 
     local str = ""
-    local results = pack(xpcall(fn,debug.traceback))
+    local results = pack(xpcall(fn,traceback))
     for i = 2,results.n do
       if i > 2 then str = str .. "\t" end
       str = str .. tostring(results[i])
@@ -444,11 +532,11 @@ hs.fileDroppedToDockIconCallback = nil
   local function tableKeys(t)
     local keyset={}
     local n=0
-    for k,v in pairs(t) do
+    for k,_ in pairs(t) do
       n=n+1
       keyset[n]=k
     end
-    table.sort(keyset)
+    tsort(keyset)
     return keyset
   end
 
@@ -461,14 +549,14 @@ hs.fileDroppedToDockIconCallback = nil
   end
 
   local function filterForRemnant(table, remnant)
-    return hs.fnutils.ifilter(table, function(item)
+    return fnutils.ifilter(table, function(item)
       return string.find(item, "^"..remnant)
     end)
   end
 
   local function findCompletions(table, remnant)
     if type(table) ~= "table" then return {} end
-    return filterForRemnant(hs.fnutils.imap(tableKeys(table), function(item)
+    return filterForRemnant(fnutils.imap(tableKeys(table), function(item)
       return typeWithSuffix(item, table)
     end), remnant)
   end
@@ -494,13 +582,13 @@ hs.fileDroppedToDockIconCallback = nil
     local mod = string.match(completionWord, "(.*)[%.:]") or ""
     local remnant = string.gsub(completionWord, mod, "")
     remnant = string.gsub(remnant, "[%.:](.*)", "%1")
-    local parents = hs.fnutils.split(mod, '%.')
+    local parents = fnutils.split(mod, '%.')
     local src = _G
 
---print(string.format("completionWord: %s", completionWord))
---print(string.format("mod: %s", mod))
---print(string.format("remnant: %s", remnant))
---print(string.format("parents: %s", hs.inspect(parents)))
+--print(sformat("completionWord: %s", completionWord))
+--print(sformat("mod: %s", mod))
+--print(sformat("remnant: %s", remnant))
+--print(sformat("parents: %s", hs.inspect(parents)))
 
     if not mod or mod == "" then
       -- Easiest case first, we have no text to work with, so just return keys from _G
@@ -529,19 +617,28 @@ hs.fileDroppedToDockIconCallback = nil
       end
     end
 
-    return hs.fnutils.map(completions, function(item) return mod..mapJoiner..item..mapEnder end)
+    return fnutils.map(completions, function(item) return mod..mapJoiner..item..mapEnder end)
   end
 
   if not hasinitfile then
-    hs.notify.register("__noinitfile", function() os.execute("open http://www.hammerspoon.org/go/") end)
-    hs.notify.show("Hammerspoon", "No config file found", "Click here for the Getting Started Guide", "__noinitfile")
-    hs.printf("-- Can't find %s; create it and reload your config.", prettypath)
+    local notify = require("hs.notify")
+    local printf = hs.printf
+    notify.register("__noinitfile", function() os.execute("open http://www.hammerspoon.org/go/") end)
+    notify.show("Hammerspoon", "No config file found", "Click here for the Getting Started Guide", "__noinitfile")
+    printf("-- Can't find %s; create it and reload your config.", prettypath)
     return hs.completionsForInputString, runstring
   end
 
   local hscrash = require("hs.crash")
+
+  -- These three modules are so tightly coupled that we will unconditionally preload them
+  require("hs.application.internal")
+  require("hs.uielement")
+  require("hs.window")
+  require("hs.application")
+
   rawrequire = require
-  require = function(modulename)
+  require = function(modulename) -- luacheck: ignore
     local result = rawrequire(modulename)
     pcall(function()
     hscrash.crashLog("require: "..modulename)
@@ -576,7 +673,7 @@ hs.fileDroppedToDockIconCallback = nil
 ---
 --- Notes:
 ---  * This is an `hs.toolbar` object that is shown by default in the Hammerspoon Console
----  * You can remove this toolbar by adding `hs.console.toolbar(nil)` to your config, or you can replace it with your own `hs.toolbar` object
+---  * You can remove this toolbar by adding `hs.console.toolbar(nil)` to your config, or you can replace it with your own `hs.webview.toolbar` object
   local toolbar = require("hs.webview.toolbar")
   local console = require("hs.console")
   local image = require("hs.image")
@@ -593,8 +690,8 @@ hs.fileDroppedToDockIconCallback = nil
   local fn, err = loadfile(fullpath)
   if not fn then hs.showError(err) return hs.completionsForInputString, runstring end
 
-  local ok, err = xpcall(fn, debug.traceback)
-  if not ok then hs.showError(err) return hs.completionsForInputString, runstring end
+  local ok, errorMessage = xpcall(fn, traceback)
+  if not ok then hs.showError(errorMessage) return hs.completionsForInputString, runstring end
 
   print "-- Done."
 
